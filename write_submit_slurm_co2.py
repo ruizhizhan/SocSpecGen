@@ -77,7 +77,7 @@ def write_slurm_group(case_name_list,slurm_name,hdf5_path_in):
     hdf5_size = get_file_size_in_gb(os.path.join(root,hdf5_path_in))
     ncores = int(np.ceil(hdf5_size/2)+1)  # 4 GB a core and 2 files
     if ncores >= 6:
-        ncores = ncores + 1
+        ncores = 32 #ncores + 3
     slurm_path = os.path.join(slurms_root,f'{slurm_name}.sh')
     if os.path.exists(slurm_path):
         os.remove(slurm_path)
@@ -90,14 +90,15 @@ def write_slurm_group(case_name_list,slurm_name,hdf5_path_in):
         f.write(f'#SBATCH -c {ncores} \n')
         f.write(f'#SBATCH --partition=wzhcnormal\n')
         f.write(f'\n')
+        f.write(f'ulimit -c unlimited\nulimit -s unlimited\nulimit -l unlimited\n')
         f.write(f'cd {slurms_root}\n')
         f.write(f'source /work/home/ac9b0k6rio/miniconda3/etc/profile.d/conda.sh\n')
         f.write(f'source /work/home/ac9b0k6rio/miniconda3/bin/activate SocSpecGen\n')
         for case_name in case_name_list:
             f.write(f'python {case_name}_lw.py\n')
-            f.write(f'rm -r {root}/{case_name}_lw\n')
+            f.write(f'rm -r ../{case_name}_lw\n')
             f.write(f'python {case_name}_sw.py\n')
-            f.write(f'rm -r {root}/{case_name}_sw\n')
+            f.write(f'rm -r ../{case_name}_sw\n')
 
 
 #wnedges_list.append(np.concatenate([np.arange(0,20000,400), np.arange(20000,90001,2000)])) # sp85, default
@@ -108,7 +109,7 @@ wnedges_lower[0] = 1.0
 band_n = len(wnedges_lower)
 
 res_list = ['001'] # '100','010','001'; run '010' and '100' for optimal configuration only. 
-star_sed_list = ['GJ3929'] # , 'LTT1445A', 'LHS1140', 'TOI198', 'TOI406', 'TOI771', 'HD260655', 'TOI244'
+star_sed_list = ['GJ3929','LTT1445A', 'LHS1140', 'TOI198', 'TOI406', 'TOI771', 'HD260655', 'TOI244'] # , 
 NT_list = [62] # 13,25,42,49,57,62(default->4500K)
 NP_list = [22] # 8,15,22,43
 nk_list = [20] # 5,10,20,30

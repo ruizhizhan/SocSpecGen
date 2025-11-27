@@ -26,7 +26,7 @@ def generate_LBL_from_xsec_two_colomn(T_grid, P_grid, Molecule_str,
             ncfile
     '''
 
-    root       = '/work/home/ac9b0k6rio/corrk_tools/'
+    root       = "/work/home/ac9b0k6rio/SocSpecGen/"
     path_in    = root+'xsec/xsec_cstep_'+resolution_xsec_file+'_files/'
     # conversion from cm²/molecule to m²/kg : m²/kg = mult_factor * cm²/molecule
 
@@ -105,7 +105,7 @@ def generate_LBL_from_xsec_two_colomn(T_grid, P_grid, Molecule_str,
     return output_path,mon_path,LbL_path
 
 def generate_LBL_from_ExoMol_hdf5(hdf5_path,Molecule_str,datasource,update_library=True,test_name=None):
-    root       = '/work/home/ac9b0k6rio/corrk_tools/'
+    root       = "/work/home/ac9b0k6rio/SocSpecGen/"
     ncfile_name = f'{Molecule_str}_{datasource}'
     hdf5_file = netCDF4.Dataset(hdf5_path, 'r')
     P_grid = np.array(hdf5_file.variables['p'][:])    # pressure in bar
@@ -169,8 +169,8 @@ def generate_LBL_from_ExoMol_hdf5(hdf5_path,Molecule_str,datasource,update_libra
         # close and save
         print("Library file updated successfully!")
         ncfile.close()
-        print(f'mv {root}{ncfile_name}.nc {root}abs_coeff/{ncfile_name}.nc')
-        os.system(f'mv {root}{ncfile_name}.nc {root}abs_coeff/{ncfile_name}.nc')
+        # print(f'mv {ncfile_name}.nc {root}abs_coeff/{ncfile_name}.nc')
+        os.system(f"mv {ncfile_name}.nc {os.path.join(root,f'abs_coeff/{ncfile_name}.nc')}")
 
     # set paths:
     #output pathname
@@ -184,9 +184,9 @@ def generate_LBL_from_ExoMol_hdf5(hdf5_path,Molecule_str,datasource,update_libra
     if os.path.exists(mon_path):
         os.system('rm '+mon_path)
     #LbL pathname
-    ref_LBL = root+'abs_coeff/'+ncfile_name+'.nc'
-    LbL_path    = f'{root}abs_coeff/{ncfile_name}_{test_name}.nc'  # the one created just before with absorption coefficients
+    ref_LBL = os.path.join(root,f'abs_coeff/{ncfile_name}.nc')
+    LbL_path    = os.path.join(root,f'abs_coeff/{ncfile_name}_{test_name}.nc')  # the one created just before with absorption coefficients
     if os.path.exists(LbL_path):
         os.remove(LbL_path) 
-    os.system(f'cp {ref_LBL} {root}abs_coeff/{ncfile_name}_{test_name}.nc')
+    os.system(f"cp {ref_LBL} {LbL_path}")
     return output_path,mon_path,LbL_path,T_grid,P_grid

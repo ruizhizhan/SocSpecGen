@@ -7,7 +7,7 @@ from tools import read_wnedges,generate_LBL_from_xsec_two_colomn,generate_LBL_fr
 
 def generate_spectral_file(test_name,spec_type: Literal['lw', 'sw'],wnedges_lower, wnedges_upper,star_name,
                            path_in,datasource,num_kterm):
-    root       = os.path.dirname(os.path.abspath(__file__))
+    root       = "/work/home/ac9b0k6rio/SocSpecGen/"
     band_n     = len(wnedges_upper)
     os.chdir(root)
     work_dir   = os.path.join(root, f'{test_name}')
@@ -36,8 +36,10 @@ def generate_spectral_file(test_name,spec_type: Literal['lw', 'sw'],wnedges_lowe
     outputfilename = 'sp_'+spec_type+'_b'+str(band_n)+'_'+star_name+'_'+datasource+'_'+'nk'+str(num_kterm)
 
     # pt file
-    os.system('rm '+root+f'/block5/pt_file_{test_name}')
-    with open(root+f'/block5/pt_file_{test_name}',"a") as file:
+    pt_path = os.path.join(root,f'block5/pt_file_{test_name}')
+    if os.path.exists(pt_path):
+        os.system(f"rm {pt_path}")
+    with open(pt_path,"a") as file:
         file.write('*PTVAL'+'\n')
         for P in P_grid:
             file.write(str(P*1e+5))
@@ -47,8 +49,10 @@ def generate_spectral_file(test_name,spec_type: Literal['lw', 'sw'],wnedges_lowe
         file.write('*END')
 
     # ref pt_file
-    os.system('rm '+root+f'/block5/ref_pt_file_{test_name}')
-    with open(root+f'/block5/ref_pt_file_{test_name}',"a") as file:
+    ref_pt_path = os.path.join(root,f'block5/ref_pt_file_{test_name}')
+    if os.path.exists(ref_pt_path):
+        os.system(f'rm {ref_pt_path}')
+    with open(ref_pt_path,"a") as file:
         file.write('*REF 1 '+str(band_n)+' '+gas_id+' 1e+5 300.0')  # *REF first−band last−band gas pressure temperature.
         
 
@@ -92,23 +96,51 @@ def generate_spectral_file(test_name,spec_type: Literal['lw', 'sw'],wnedges_lowe
 
     os.chmod(exec_file_name,0o777)
     os.system(exec_file_name)                    # run file script
-    os.system('rm '+exec_file_name)                   # clean script'''
+    os.system('rm '+exec_file_name)                   # clean script
 
-    def find_index(lower_bound,upper_bound,lower, upper):
+    def find_index(lower_bound, upper_bound, lower, upper):
+        """
+        查找 lower 和 upper 所在的 band 索引。
+        
+        逻辑规则：
+        1. 如果数值 < 整体下限 (lower_bound[0]) -> 返回 0
+        2. 如果数值 > 整体上限 (upper_bound[-1]) -> 返回 最后一个 index
+        3. 如果在范围内 -> 返回对应的 band index
+        
+        参数:
+        lower_bound, upper_bound: 长度为 band_n 的 numpy 数组，需按从小到大排序
+        lower, upper: 待查找的数值
+        """
         lb = np.array(lower_bound)
         ub = np.array(upper_bound)
+        n = len(lb) # band 的总数量
+
+        # 定义一个内部函数来复用逻辑
+        def get_clamped_idx(val):
+            # 1. 超出下限：返回 0
+            if val < lb[0]:
+                return 0
+            
+            # 2. 超出上限：返回最后一个索引
+            if val > ub[-1]:
+                return n - 1
+            
+            # 3. 正常查找：在区间内
+            matches = np.where((lb <= val) & (ub >= val))[0]
+            
+            if matches.size > 0:
+                return matches[0]
+            else:
+                # 4. 特殊情况：值在 min 和 max 之间，但正好落在两个 band 的缝隙里
+                # (例如 band1是10-20，band2是30-40，数值是25)
+                # 如果你的 band 是连续的，这步永远不会触发。
+                # 如果有缝隙，这里返回 None 还是其它值取决于业务需求。
+                return None 
+
+        idx_lower = get_clamped_idx(lower)
+        idx_upper = get_clamped_idx(upper)
         
-        # 查找 lower 所在的索引
-        # 条件: lower_bound <= lower 且 upper_bound >= lower
-        matches_l = np.where((lb <= lower) & (ub >= lower))[0]
-        idx_lower = matches_l[0] if matches_l.size > 0 else None
-        
-        # 查找 upper 所在的索引
-        # 条件: lower_bound <= upper 且 upper_bound >= upper
-        matches_u = np.where((lb <= upper) & (ub >= upper))[0]
-        idx_upper = matches_u[0] if matches_u.size > 0 else None
-        
-        return idx_lower, idx_upper
+        return idx_lower+1, idx_upper+1
 
  # 5.2 Generate corrk data
     exec_file_corrk_abs = f"corr_k_ExoMol_{test_name}.sh"
@@ -117,13 +149,13 @@ def generate_spectral_file(test_name,spec_type: Literal['lw', 'sw'],wnedges_lowe
 
     with open(exec_file_corrk_abs, "w+") as f:
         f.write('Ccorr_k'+' ')
-        f.write('-s '+work_dir+f'/sp_b{band_n}_{test_name}'+' ')                 # spectral file
+        f.write(f'-s {skeleton_file_name} ')                 # spectral file
         # find the right band limits
         lower = 1.0; upper  = 20000.0
         idx_lower, idx_upper = find_index(wnedges_lower,wnedges_upper,lower,upper)
         f.write(f'-R {idx_lower} {idx_upper} ')                          # band limits
-        f.write('-F '+root+f'/block5/pt_file_{test_name}'+' ')                        # pressures and temperatures at which to calculate coefficients
-        f.write('-r '+root+f'/block5/ref_pt_file{test_name}'+' ')                    # reference conditions for scaling
+        f.write(f'-F {pt_path}'+' ')                        # pressures and temperatures at which to calculate coefficients
+        f.write(f'-r {ref_pt_path}'+' ')                    # reference conditions for scaling
         f.write('-l '+gas_id+' 1.0e5'+' ')                        # generate line absorption data. gas id then maximum absorptive pathlength for the gas (kg/m2)
         f.write(f'-n {num_kterm}'+' ')                             # Number of k-terms the correlated-k fit should use
         f.write('-lk'+' ')                               # a look-up table will be used for the pressure/temperature scaling
@@ -142,8 +174,10 @@ def generate_spectral_file(test_name,spec_type: Literal['lw', 'sw'],wnedges_lowe
     if include_cia:
         T_cia_grid = np.arange(200,801,100) # should be consistent with the CIA file, Figure 4.25
         # if T is too high, OLR will become very large...
-        os.system('rm '+root+f'/block19/pt_cia_{test_name}')
-        with open(root+f'/block19/pt_cia_{test_name}',"a") as file:
+        pt_cia_path = os.path.join(root,f'block19/pt_cia_{test_name}')
+        if os.path.exists(pt_cia_path):
+            os.system(f'rm {pt_cia_path}')
+        with open(pt_cia_path,"a") as file:
             file.write('*PTVAL'+'\n')
             P_0 = 1 # bar (pick surface pressure? from other code: titan 2e5, mars 1e5...)
             # if P is set to small, OLR will become very large...
@@ -163,10 +197,18 @@ def generate_spectral_file(test_name,spec_type: Literal['lw', 'sw'],wnedges_lowe
         #file_name_list.append('CO2-CO2_2851_3250_298.00K')
         
         for file in file_name_list:
-            os.system('rm '+root+f'/block19/output_CIA_{file}_{test_name}')
-            os.system('rm '+root+f'/block19/output_CIA_{file}_{test_name}.nc')
-            os.system('rm '+root+f'/block19/monitoring_CIA_{file}_{test_name}')
-            os.system('rm '+root+f'/block19/LBL_CIA_{file}_{test_name}.nc')
+            output_cia_path = os.path.join(root,f'block19/output_CIA_{file}_{test_name}')
+            if os.path.exists(output_cia_path):
+                os.remove(output_cia_path)
+            output_cia_nc_path = os.path.join(root,f'block19/output_CIA_{file}_{test_name}.nc')
+            if os.path.exists(output_cia_nc_path):
+                os.remove(output_cia_nc_path)
+            mon_cia_path = os.path.join(root,f'block19/monitoring_CIA_{file}_{test_name}')
+            if os.path.exists(mon_cia_path):
+                os.remove(mon_cia_path)
+            lbl_cia_path = os.path.join(root,f'block19/LBL_CIA_{file}_{test_name}.nc')
+            if os.path.exists(lbl_cia_path):
+                os.remove(lbl_cia_path)
             
         exec_file_CIA = os.path.join(work_dir,f"corr_k_CIA_{test_name}.sh")
         if os.path.exists(exec_file_CIA):
@@ -179,7 +221,7 @@ def generate_spectral_file(test_name,spec_type: Literal['lw', 'sw'],wnedges_lowe
                 f.write('Ccorr_k'+
                         ' -CIA '+root+f'/hitran/CO2-CO2_2018/'+file+'_.cia'+   # hitran−cia−file
                         f' -R {idx_lower} {idx_upper} '+  # first and last band
-                        ' -F '+root+f'/block19/pt_cia_{test_name}'+   # p-t file
+                        f' -F {pt_cia_path}'+   # p-t file
                         ' -ct '+gas_id+' '+gas_id+' 1000.0'+ # gas1 gas2 max−path(maximum absorptive pathlength (kg2/m5) for the gas pair.)
                         ' -i '+'1.0'+ # Frequency increment
                         ' -t 1.0e-2'+ # Tolerance for the calculation
@@ -199,16 +241,16 @@ def generate_spectral_file(test_name,spec_type: Literal['lw', 'sw'],wnedges_lowe
         # make hitran format .xsc file
         # run prepare_xuv_new.ipynb get 'CO2_venot.uvxsc'
         uv_pt_file = 'pt_co2_uv'
-        UV_CO2_path='ExoMol/12C_16O2/XUV/'
-        os.system(f'cp {UV_CO2_path}{uv_pt_file} ./block5')       # change the T grid will not change the output spectral file
+        UV_CO2_path=os.path.join(root,'ExoMol/12C_16O2/XUV/')
+        os.system(f"cp {os.path.join(UV_CO2_path,uv_pt_file)} {os.path.join(root,'block5')}")       # change the T grid will not change the output spectral file
         UV_CO2 = 'CO2_DTU.uvxsc'
         
         exec_file_corrk_xuv = f"corr_k_ExoMol_{test_name}_xuv.sh"
         if os.path.exists(exec_file_corrk_xuv):
             os.system('rm '+exec_file_corrk_xuv)
-        output_path_xuv = root+f'/block5/output_xuv_{test_name}'
-        mon_path = root+f'/block5/monitoring_xuv_{test_name}'
-        LBL_path = root+f'/block5/LBL_xuv_{test_name}.nc'
+        output_path_xuv = os.path.join(root,f'block5/output_xuv_{test_name}')
+        mon_path = os.path.join(root,f'block5/monitoring_xuv_{test_name}')
+        LBL_path = os.path.join(root,f'block5/LBL_xuv_{test_name}.nc')
         if os.path.exists(output_path_xuv):
             os.system('rm '+output_path_xuv)
             os.system(f'rm {output_path_xuv}.nc')
@@ -218,7 +260,7 @@ def generate_spectral_file(test_name,spec_type: Literal['lw', 'sw'],wnedges_lowe
             os.system('rm '+LBL_path)
         with open(exec_file_corrk_xuv, "w+") as f:
             f.write('Ccorr_k'+' ')
-            f.write('-s '+work_dir+f'/sp_b{band_n}_{test_name}'+' ')                 # spectral file
+            f.write(f'-s {skeleton_file_name} ')                 # spectral file
             # find the right band limits
             f.write(f'-UVX {os.path.join(root,UV_CO2_path,UV_CO2)} ')
             lower = 1e7/250; upper  = 1e7/100        # from xsec plot; nm -> cm-1
