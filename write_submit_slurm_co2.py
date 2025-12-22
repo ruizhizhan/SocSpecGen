@@ -102,9 +102,30 @@ def write_slurm_group(case_name_list,slurm_name,hdf5_path_in):
 
 
 #wnedges_list.append(np.concatenate([np.arange(0,20000,400), np.arange(20000,90001,2000)])) # sp85, default
-# designed for CO2
-wnedges_lower = np.concatenate([np.arange(0,20000,400), np.arange(40000,100000-5000,5000)])
-wnedges_upper = np.concatenate([np.arange(400,20001,400), np.arange(45000,100000,5000)])
+
+# designed for CO2: default, empty band between 20000-40000 cm-1
+# wnedges_lower = np.concatenate([np.arange(0,20001,400), np.arange(40000,100000-5000,5000)])
+# wnedges_upper = np.concatenate([np.arange(400,20001,400), np.arange(40000,100000,5000)])
+
+# designed for CO2: high resolution around 15 um 
+# wavlen_upper = np.arange(13.52e-6,16.64e-6,0.01e-6) # MIRI F1500W: 13.52 - 16.64
+# wavlen_lower = np.arange(13.53e-6,16.65e-6,0.01e-6) # MIRI F1500W: 13.52 - 16.64
+# wavnum_upper = [1e-2/wavlen for wavlen in wavlen_upper]
+# wavnum_lower = [1e-2/wavlen for wavlen in wavlen_lower]
+# wnedges_lower = np.concatenate([np.arange(0,20001,400), np.arange(40000,100000-5000,5000)])
+# wnedges_upper = np.concatenate([np.arange(400,20001,400), np.arange(40000,100000,5000)])
+# wnedges_lower = np.sort(np.concatenate([wnedges_lower, wavnum_lower])); wnedges_lower = np.unique(np.round(wnedges_lower, 10))
+# wnedges_upper = np.sort(np.concatenate([wnedges_upper, wavnum_upper])); wnedges_upper = np.unique(np.round(wnedges_upper, 10))
+
+# design for DDT plot, 0.2 um from 1 to 25 um
+wavlen = np.arange(26.2e-6,1.0e-6,-0.2e-6)
+wavnum = [1e-2/wavlen_i for wavlen_i in wavlen]
+wnedges = np.concatenate([np.arange(0,20001,400), np.arange(40000,100000,5000), wavnum])
+wnedges = np.unique(np.round(wnedges, 3))
+wnedges_lower = wnedges[:-1]
+wnedges_upper = wnedges[1:]
+
+
 wnedges_lower[0] = 1.0
 band_n = len(wnedges_lower)
 

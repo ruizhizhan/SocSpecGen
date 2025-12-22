@@ -1,0 +1,38 @@
+# --- 系统文件 ---
+.DS_Store
+git_ignore_files
+
+# --- Python ---
+__pycache__/
+util/__pycache__/
+*.py[cod]
+
+# --- 核心策略：忽略大文件夹下的所有内容，但保留 .gitkeep ---
+
+# 1. 忽略这些目录下的所有文件 (*)
+abs_coeff/*
+block5/*
+block19/*
+ExoMol/*
+hitran/*
+slurms/*
+slurms_backup/*
+spectral_files/*
+stellar_spectra/*
+
+# 2. 【关键】使用 ! (非) 来强制保留目录结构中的 .gitkeep 文件
+# (** 表示递归匹配所有子目录)
+!abs_coeff/**/.gitkeep
+!block5/**/.gitkeep
+!block19/**/.gitkeep
+!ExoMol/**/.gitkeep
+!hitran/**/.gitkeep
+!slurms/**/.gitkeep
+!slurms_backup/**/.gitkeep
+!spectral_files/**/.gitkeep
+!stellar_spectra/**/.gitkeep
+
+# --- 其他具体文件 ---
+GJ3929_stellar_spectra_comparison.png
+*.err
+*.out

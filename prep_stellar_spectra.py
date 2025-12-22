@@ -25,7 +25,8 @@ from typing import Literal, Tuple, List
 
 
 
-def write_to_socrates_input(output_filename,star_name,wavelen_m,irradiance_wm3,model_type:Literal['phoenix','sphinx']):
+def write_to_socrates_input(output_filename,star_name,wavelen_m,irradiance_wm3,model_type:Literal['phoenix','sphinx1','sphinx2-condcloud','sphinx2-graycloud','sphinx2-graycloud_MLT0.5']):
+    # start here
     """
         wavelen_m: wavelength in meter
         irradiance_wm3: irradiance in W/m3
@@ -40,11 +41,17 @@ def write_to_socrates_input(output_filename,star_name,wavelen_m,irradiance_wm3,m
             output_file.write(f'      {wavelen:.16e}      {irradiance:.16e}\n')
         output_file.write('*END\n')
         
-def interp_sed(Teff,MH,logg_cgs,model_type:Literal['phoenix','sphinx'],c_to_o=0.5):
+def interp_sed(Teff,MH,logg_cgs,model_type:Literal['phoenix','sphinx1','sphinx2-condcloud','sphinx2-graycloud','sphinx2-graycloud_MLT0.5'],c_to_o=0.5):
     if model_type == 'phoenix':
         sp = S.catalog.grid_to_spec('phoenix', Teff,MH,logg_cgs)    
-    elif model_type == 'sphinx':
-        sp = grid_to_spec_sphinx(Teff, MH, logg_cgs, c_to_o)
+    elif model_type == 'sphinx1':
+        sp = grid_to_spec_sphinx(Teff, MH, logg_cgs, c_to_o, sphinx_dir = os.path.join(os.environ['PYSYN_CDBS'], 'grid', 'sphinx-I'))
+    elif model_type == 'sphinx2-condcloud':
+        sp = grid_to_spec_sphinx(Teff, MH, logg_cgs, c_to_o, sphinx_dir = os.path.join(os.environ['PYSYN_CDBS'], 'grid', 'sphinx-II','SPHINXII_condcloud','SPECTRA'))
+    elif model_type == 'sphinx2-graycloud':
+        sp = grid_to_spec_sphinx(Teff, MH, logg_cgs, c_to_o, sphinx_dir = os.path.join(os.environ['PYSYN_CDBS'], 'grid', 'sphinx-II','SPHINXII_graycloud','SPECTRA'))
+    elif model_type == 'sphinx2-graycloud_MLT0.5':
+        sp = grid_to_spec_sphinx(Teff, MH, logg_cgs, c_to_o, sphinx_dir = os.path.join(os.environ['PYSYN_CDBS'], 'grid', 'sphinx-II','SPHINXII_graycloud_MLT0.5','SPECTRA'))
     else:
         raise ValueError('model_type must be phoenix or sphinx')
     wave_ang = sp.waveset
@@ -80,12 +87,12 @@ for star in ['GJ3929', 'LTT1445A', 'LHS1140', 'TOI198', 'TOI406', 'TOI771', 'HD2
     # write_to_socrates_input(output_filename, star, wavelen_m, irradiance_wm3, model_type='phoenix')
 
     # sphinx model
-    target_ctoo = 0.5 # unknown, set to Sun-like
-    wavelen_m, irradiance_wm3 = interp_sed(Teff, MH, logg_cgs, model_type='sphinx', c_to_o=target_ctoo)
-    output_filename = os.path.join(root,f'stellar_spectra/soc_in/{star}_sphinx')
-    write_to_socrates_input(output_filename, star, wavelen_m, irradiance_wm3, model_type='sphinx')
+    # target_ctoo = 0.5 # unknown, set to Sun-like
+    # wavelen_m, irradiance_wm3 = interp_sed(Teff, MH, logg_cgs, model_type='sphinx1', c_to_o=target_ctoo)
+    # output_filename = os.path.join(root,f'stellar_spectra/soc_in/{star}_sphinx')
+    # write_to_socrates_input(output_filename, star, wavelen_m, irradiance_wm3, model_type='sphinx1')
 
-"""### a comparison here for test
+### a comparison here for test
 # GJ-3929 parameters
 Teff = 3384; MH = -0.02; stellar_mass_to_solar = 0.313; stellar_radius_to_solar = 0.32
 g_sun_cgs = aconst.GM_sun.value/aconst.R_sun.value**2 * 1e2 # [cm/s^2]
@@ -104,15 +111,20 @@ ax.plot(wave_values, flux_values, label=f'PHOENIX')
 
 # generate sphinx spectrum
 target_ctoo = 0.5 # unknown, set to Sun-like
-sp = grid_to_spec_sphinx(Teff, MH, logg_cgs, target_ctoo)
-wave_ang = sp.waveset
-flux_flam = sp(wave_ang, flux_unit='flam')
-wave_um = wave_ang.value / 10000.0
-flux_wm3 = flux_flam.value * 1e7
-wave_um, flux_wm3 = rebin_spectrum(wave_um, flux_wm3, target_R)
-ax.plot(wave_um, flux_wm3, label=f'SPHINX')
+wavelen_m, irradiance_wm3 = interp_sed(Teff, MH, logg_cgs, model_type='sphinx1', c_to_o=target_ctoo)
+ax.plot(wavelen_m*1e6, irradiance_wm3, label=f'SPHINX-I')
+
+wavelen_m, irradiance_wm3 = interp_sed(Teff, MH, logg_cgs, model_type='sphinx2-condcloud', c_to_o=target_ctoo)
+ax.plot(wavelen_m*1e6, irradiance_wm3, label=f'SPHINX-II-condcloud')
+
+wavelen_m, irradiance_wm3 = interp_sed(Teff, MH, logg_cgs, model_type='sphinx2-graycloud', c_to_o=target_ctoo)
+ax.plot(wavelen_m*1e6, irradiance_wm3, label=f'SPHINX-II-graycloud')
+
+wavelen_m, irradiance_wm3 = interp_sed(Teff, MH, logg_cgs, model_type='sphinx2-graycloud_MLT0.5', c_to_o=target_ctoo)
+ax.plot(wavelen_m*1e6, irradiance_wm3, label=f'SPHINX-II-graycloud_MLT0.5')
+
 ax.set_xlim(0, 5.0)
 ax.set_xlabel('Wavelength (micron)')
 ax.set_ylabel(r'Flux (W/m3)')
 ax.legend()
-plt.savefig('GJ3929_stellar_spectra_comparison.png')"""
+plt.savefig('GJ3929_stellar_spectra_comparison.png')

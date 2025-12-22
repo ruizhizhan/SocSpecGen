@@ -27,7 +27,7 @@ def generate_LBL_from_xsec_two_colomn(T_grid, P_grid, Molecule_str,
     '''
 
     root       = "/work/home/ac9b0k6rio/SocSpecGen/"
-    path_in    = root+'xsec/xsec_cstep_'+resolution_xsec_file+'_files/'
+    path_in    = root+'/xsec/xsec_cstep_'+resolution_xsec_file+'_files/'
     # conversion from cm²/molecule to m²/kg : m²/kg = mult_factor * cm²/molecule
 
     Na          = 6.0221408e+23 # Avogadro number
@@ -94,18 +94,59 @@ def generate_LBL_from_xsec_two_colomn(T_grid, P_grid, Molecule_str,
     
     # set paths:
     #output pathname
-    output_path = root+'block5/output_ExoMol_'+resolution_xsec_file
+    output_path = root+'/block5/output_ExoMol_'+resolution_xsec_file
     os.system('rm '+output_path)
     os.system('rm '+output_path+'.nc')
     #monitoring pathname
-    mon_path    = root+'block5/monitoring_ExoMol_'+resolution_xsec_file
+    mon_path    = root+'/block5/monitoring_ExoMol_'+resolution_xsec_file
     os.system('rm '+mon_path)
     #LbL pathname
-    LbL_path    = root+'abs_coeff/'+Molecule_str+'_ExoMol_'+resolution_xsec_file+'.nc'  # the one created just before with absorption coefficients
+    LbL_path    = root+'/abs_coeff/'+Molecule_str+'_ExoMol_'+resolution_xsec_file+'.nc'  # the one created just before with absorption coefficients
     return output_path,mon_path,LbL_path
 
-def generate_LBL_from_ExoMol_hdf5(hdf5_path,Molecule_str,datasource,update_library=True,test_name=None):
-    root       = "/work/home/ac9b0k6rio/SocSpecGen/"
+def find_index(lower_bound, upper_bound, lower, upper):
+    lb = np.array(lower_bound)
+    ub = np.array(upper_bound)
+    n = len(lb) 
+
+    def get_clamped_idx(val, is_lower_bound_val):
+        # 1. Below global lower bound: return 0
+        if val < lb[0]:
+            return 0
+        
+        # 2. Above global upper bound: return the last index
+        if val > ub[-1]:
+            return n - 1
+        
+        # 3. Find which bands contain the value
+        # Assuming contiguous bands (e.g., 0-10, 10-20), a boundary value like 10 will match two bands.
+        matches = np.where((lb <= val) & (ub >= val))[0]
+        
+        if matches.size > 0:
+            if is_lower_bound_val:
+                # Logic A: If finding 'lower' and it falls on a boundary, take the "higher" band.
+                # i.e., take the last match (e.g., for matches [0, 1], take 1).
+                return matches[-1]
+            else:
+                # Logic B: If finding 'upper' and it falls on a boundary, take the "lower" band.
+                # i.e., take the first match (e.g., for matches [0, 1], take 0).
+                return matches[0]
+        else:
+            # Special case: Value falls into a gap between bands (adjust logic if necessary).
+            return None 
+
+    # Pass True/False to distinguish between finding lower or upper bound
+    idx_lower = get_clamped_idx(lower, is_lower_bound_val=True)
+    idx_upper = get_clamped_idx(upper, is_lower_bound_val=False)
+    
+    # Ensure return value is index + 1 (consistent with original code logic)
+    # Note: If get_clamped_idx returns None, this raises a ValueError.
+    if idx_lower is not None and idx_upper is not None:
+        return idx_lower + 1, idx_upper + 1
+    else:
+        raise ValueError("find_index: Lower or upper value falls into a gap between bands.")
+
+def generate_LBL_from_ExoMol_hdf5(root, hdf5_path,Molecule_str,datasource,update_library=True,test_name=None):
     ncfile_name = f'{Molecule_str}_{datasource}'
     hdf5_file = netCDF4.Dataset(hdf5_path, 'r')
     P_grid = np.array(hdf5_file.variables['p'][:])    # pressure in bar
@@ -174,13 +215,13 @@ def generate_LBL_from_ExoMol_hdf5(hdf5_path,Molecule_str,datasource,update_libra
 
     # set paths:
     #output pathname
-    output_path = root+'block5/output_'+ncfile_name +'_'+test_name if test_name else ''
+    output_path = root+'/block5/output_'+ncfile_name +'_'+test_name if test_name else ''
     if os.path.exists(output_path):
         os.system('rm '+output_path)
     if os.path.exists(output_path+'.nc'):
         os.system('rm '+output_path+'.nc')
     #monitoring pathname
-    mon_path    = root+'block5/monitoring_'+ncfile_name+'_'+test_name if test_name else ''
+    mon_path    = root+'/block5/monitoring_'+ncfile_name+'_'+test_name if test_name else ''
     if os.path.exists(mon_path):
         os.system('rm '+mon_path)
     #LbL pathname

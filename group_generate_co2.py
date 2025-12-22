@@ -5,6 +5,76 @@ from typing import Literal
 import re
 from tools import read_wnedges,generate_LBL_from_xsec_two_colomn,generate_LBL_from_ExoMol_hdf5
 
+def find_index(lower_bound, upper_bound, lower, upper):
+        """
+        查找 lower 和 upper 所在的 band 索引。
+        
+        逻辑规则：
+        1. 如果数值 < 整体下限 -> 返回 0
+        2. 如果数值 > 整体上限 -> 返回 最后一个 index
+        3. 如果在范围内：
+        - Lower 在分界线上 -> 选 index 大的 band (matches[-1])
+        - Upper 在分界线上 -> 选 index 小的 band (matches[0])
+        """
+        lb = np.array(lower_bound)
+        ub = np.array(upper_bound)
+        n = len(lb) 
+
+        def get_clamped_idx(val, is_lower_bound_val):
+            # 1. 超出整体下限：返回 0
+            if val < lb[0]:
+                return 0
+            
+            # 2. 超出整体上限：返回最后一个索引
+            if val > ub[-1]:
+                return n - 1
+            
+            # 3. 查找数值落在哪些 band 区间内
+            # 假设 band 是连续的（例如 0-10, 10-20），边界值 10 会同时匹配两个 band
+            matches = np.where((lb <= val) & (ub >= val))[0]
+            
+            if matches.size > 0:
+                if is_lower_bound_val:
+                    # 修复逻辑A：如果是查找 lower，且在分界线上，取“大一点”的 band
+                    # 即取匹配列表中的最后一个 (例如 [0, 1] 取 1)
+                    return matches[-1]
+                else:
+                    # 修复逻辑B：如果是查找 upper，且在分界线上，取“小一点”的 band
+                    # 即取匹配列表中的第一个 (例如 [0, 1] 取 0)
+                    return matches[0]
+            else:
+                # 特殊情况：值在缝隙中 (如有必要可调整为就近原则)
+                return None 
+
+        # 分别传入 True/False 来区分是查找 lower 还是 upper
+        idx_lower = get_clamped_idx(lower, is_lower_bound_val=True)
+        idx_upper = get_clamped_idx(upper, is_lower_bound_val=False)
+        
+        # 确保返回的是索引+1（根据原代码逻辑保持一致）
+        # 注意：如果 get_clamped_idx 返回 None，这里会报错，建议在业务层处理 None
+        if idx_lower is not None and idx_upper is not None:
+            return idx_lower + 1, idx_upper + 1
+        else:
+            raise ValueError("find_index: Lower or upper value falls into a gap between bands.")
+
+def derive_empty_bands_co2(wnedges_lower, wnedges_upper):
+    empty_band = np.ones(len(wnedges_lower),dtype=bool) # True means empty band
+    # line absorption 
+    lower = 1.0; upper  = 20000.0
+    idx_lower, idx_upper = find_index(wnedges_lower,wnedges_upper,lower,upper)
+    empty_band[idx_lower-1:idx_upper] = False
+    
+    # CIA absorption
+    lower = 1; upper  = 3500
+    idx_lower, idx_upper = find_index(wnedges_lower,wnedges_upper,lower,upper)
+    empty_band[idx_lower-1:idx_upper] = False
+    
+    # UV absorption
+    lower = 1e7/250; upper  = 1e7/100        # from xsec plot; nm -> cm-1
+    idx_lower, idx_upper = find_index(wnedges_lower,wnedges_upper,lower,upper)
+    empty_band[idx_lower-1:idx_upper] = False
+    return empty_band
+
 def generate_spectral_file(test_name,spec_type: Literal['lw', 'sw'],wnedges_lower, wnedges_upper,star_name,
                            path_in,datasource,num_kterm):
     root       = "/work/home/ac9b0k6rio/SocSpecGen/"
@@ -21,7 +91,8 @@ def generate_spectral_file(test_name,spec_type: Literal['lw', 'sw'],wnedges_lowe
     gas_id = '2'
     include_cia = True       # test only
     include_solar_sed = True # test only
-    gas_ab_source: Literal['hitran', 'ExoMol', 'ExoMol0pres'] = 'ExoMol' 
+    gas_ab_source: Literal['hitran', 'ExoMol', 'ExoMol0pres'] = 'ExoMol'
+    empty_band = derive_empty_bands_co2(wnedges_lower, wnedges_upper)
 
     ncfile_name = f'{Molecule_str}_{datasource}'
     if os.path.exists(os.path.join(root,f'abs_coeff/{ncfile_name}.nc')):
@@ -82,9 +153,9 @@ def generate_spectral_file(test_name,spec_type: Literal['lw', 'sw'],wnedges_lowe
             f.write(f'{wnedges_lower[band]} ')                  #
             f.write(str(wnedges_upper[band])+'\n')              #
 
-
-        for band in range(band_n):                         # absorber ids in each band 
-            f.write(gas_id+'\n')                             #
+        # figure out empty band: 
+        for band in range(band_n):                         # absorber ids in each band
+            f.write(gas_id+'\n') if not empty_band[band] else f.write('0\n')
 
         for band in range(band_n):                         # continua ids in each band
             f.write('0'+'\n')                             #
@@ -97,50 +168,6 @@ def generate_spectral_file(test_name,spec_type: Literal['lw', 'sw'],wnedges_lowe
     os.chmod(exec_file_name,0o777)
     os.system(exec_file_name)                    # run file script
     os.system('rm '+exec_file_name)                   # clean script
-
-    def find_index(lower_bound, upper_bound, lower, upper):
-        """
-        查找 lower 和 upper 所在的 band 索引。
-        
-        逻辑规则：
-        1. 如果数值 < 整体下限 (lower_bound[0]) -> 返回 0
-        2. 如果数值 > 整体上限 (upper_bound[-1]) -> 返回 最后一个 index
-        3. 如果在范围内 -> 返回对应的 band index
-        
-        参数:
-        lower_bound, upper_bound: 长度为 band_n 的 numpy 数组，需按从小到大排序
-        lower, upper: 待查找的数值
-        """
-        lb = np.array(lower_bound)
-        ub = np.array(upper_bound)
-        n = len(lb) # band 的总数量
-
-        # 定义一个内部函数来复用逻辑
-        def get_clamped_idx(val):
-            # 1. 超出下限：返回 0
-            if val < lb[0]:
-                return 0
-            
-            # 2. 超出上限：返回最后一个索引
-            if val > ub[-1]:
-                return n - 1
-            
-            # 3. 正常查找：在区间内
-            matches = np.where((lb <= val) & (ub >= val))[0]
-            
-            if matches.size > 0:
-                return matches[0]
-            else:
-                # 4. 特殊情况：值在 min 和 max 之间，但正好落在两个 band 的缝隙里
-                # (例如 band1是10-20，band2是30-40，数值是25)
-                # 如果你的 band 是连续的，这步永远不会触发。
-                # 如果有缝隙，这里返回 None 还是其它值取决于业务需求。
-                return None 
-
-        idx_lower = get_clamped_idx(lower)
-        idx_upper = get_clamped_idx(upper)
-        
-        return idx_lower+1, idx_upper+1
 
  # 5.2 Generate corrk data
     exec_file_corrk_abs = f"corr_k_ExoMol_{test_name}.sh"
@@ -159,6 +186,9 @@ def generate_spectral_file(test_name,spec_type: Literal['lw', 'sw'],wnedges_lowe
         f.write('-l '+gas_id+' 1.0e5'+' ')                        # generate line absorption data. gas id then maximum absorptive pathlength for the gas (kg/m2)
         f.write(f'-n {num_kterm}'+' ')                             # Number of k-terms the correlated-k fit should use
         f.write('-lk'+' ')                               # a look-up table will be used for the pressure/temperature scaling
+        if spec_type == 'sw':
+            Solar_spec = root+'/stellar_spectra/soc_in/'+star_name
+            f.write(f'+S {Solar_spec} ')                     # Solar spectrum
         f.write('+p'+' ')                                # Planckian Weighting
         f.write('-o '+output_path+' ')                   # Pathname of output file
         f.write('-m '+mon_path+' ')                      # Pathname of monitoring file
@@ -270,7 +300,6 @@ def generate_spectral_file(test_name,spec_type: Literal['lw', 'sw'],wnedges_lowe
             f.write('-i 1.0 ')
             f.write('-l '+gas_id+' 1.0e1'+' ')                        # generate line absorption data. gas id then maximum absorptive pathlength for the gas (kg/m2)
             f.write('-t 1.0e-3 ')
-            Solar_spec = root+'/stellar_spectra/soc_in/'+star_name
             f.write(f'+S {Solar_spec} ')
             f.write('-o '+output_path_xuv+' ')                   # Pathname of output file
             f.write('-m '+mon_path+' ')                      # Pathname of monitoring file
