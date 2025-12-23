@@ -37,10 +37,15 @@ def calculate_band_occupancy(
 ) -> List[List[str]]:
     """
     Determines which gases are present in each spectral band.
+    Logic: A gas is present if its main absorption, UV, OR any of its active CIAs 
+    overlap with the band.
     """
     band_map = []
     num_bands = len(wnedges) - 1
     gas_configs = {name: cfg.GAS_LIBRARY[name] for name in selected_gases}
+    
+    # New: Dictionary to track missing bands for each gas
+    missing_bands_report = {name: [] for name in selected_gases}
     
     for i in range(num_bands):
         band_min = wnedges[i]
@@ -63,17 +68,54 @@ def calculate_band_occupancy(
                     current_band_gas_ids.add(gas_id)
                     break 
         
-        # 2. Check Active CIAs
+        # 2. Check Active CIAs (Modified for Segmented Lists)
         for id1, id2, pair_name in active_cia_tuples:
             cia_conf = cfg.CIA_LIBRARY[pair_name]
-            cia_min = cia_conf['lower_wn']
-            cia_max = cia_conf['upper_wn']
-            if max(band_min, cia_min) < min(band_max, cia_max):
+            
+            c_lowers = cia_conf['lower_wn']
+            c_uppers = cia_conf['upper_wn']
+            
+            if not isinstance(c_lowers, (list, np.ndarray)):
+                c_lowers = [c_lowers]
+            if not isinstance(c_uppers, (list, np.ndarray)):
+                c_uppers = [c_uppers]
+            
+            is_overlap = False
+            for c_min, c_max in zip(c_lowers, c_uppers):
+                if max(band_min, c_min) < min(band_max, c_max):
+                    is_overlap = True
+                    break 
+            
+            if is_overlap:
                 current_band_gas_ids.add(id1)
                 current_band_gas_ids.add(id2)
         
+        # New: Record missing gases for this band
+        # Check which of the selected gases ended up NOT being in the set
+        for gas_name in selected_gases:
+            gid = gas_configs[gas_name]['gas_id']
+            if gid not in current_band_gas_ids:
+                # Record 1-based band index (i + 1)
+                missing_bands_report[gas_name].append(i + 1)
+
         band_map.append(sorted(list(current_band_gas_ids)))
-        
+    
+    # New: Print the report
+    print("\n" + "="*40)
+    print("      GAS BAND OCCUPANCY REPORT")
+    print("="*40)
+    for gas_name, missing_list in missing_bands_report.items():
+        if missing_list:
+            # Shorten output if too long
+            if len(missing_list) > 20:
+                missing_str = f"{missing_list[:10]} ... {missing_list[-5:]} (Total {len(missing_list)} bands)"
+            else:
+                missing_str = str(missing_list)
+            print(f"Gas {gas_name:<5} is MISSING in Bands: {missing_str}")
+        else:
+            print(f"Gas {gas_name:<5} is present in ALL bands.")
+    print("="*40 + "\n")
+
     return band_map
 
 def get_solar_wn_range(file_path: str) -> Tuple[float, float]:
@@ -149,30 +191,22 @@ def write_worker_script(filename, test_name, selected_gases_list, spec_type: Lit
             print(f"Solar Data Range (cm-1): {min_solar_wn:.2f} - {max_solar_wn:.2f}")
             
             # Filter global WNEDGES
-            # We keep edges that are within the solar range (approximate overlap)
-            # Logic: keep edges where edge >= min and edge <= max
-            # Note: We need at least 2 edges to form a band.
-            
-            # Using slightly relaxed bounds to ensure we don't cut off a band that partially overlaps if desired,
-            # but strictly "solar data available" usually means we restrict to the range.
             valid_indices = np.where((cfg.WNEDGES >= min_solar_wn) & (cfg.WNEDGES <= max_solar_wn))[0]
             
             if len(valid_indices) < 2:
-                # Fallback or strict check
-                # Try to include bands that *overlap* the range
                 print("Warning: Solar range strictly contained very few edges. expanding to overlaps.")
                 valid_indices = np.where((cfg.WNEDGES >= min_solar_wn) & (cfg.WNEDGES <= max_solar_wn))[0]
 
             if len(valid_indices) >= 2:
                 target_wnedges = cfg.WNEDGES[valid_indices]
-                print(f"Restricted WNEDGES to {len(target_wnedges)} edges based on Solar Data.")
+                print(f"Restricted to {len(target_wnedges)-1} bands based on Solar Data. Original bands: {len(cfg.WNEDGES)-1}")
             else:
                 print("Warning: Solar data range does not overlap sufficiently with WNEDGES. Using full edges.")
                 
         except Exception as e:
             print(f"Error reading solar file: {e}. Using full WNEDGES.")
 
-    # Calculate Band Map using the TARGET edges (Important: Must use the edges that will be injected)
+    # Calculate Band Map using the TARGET edges
     band_gas_map = calculate_band_occupancy(target_wnedges, selected_gases_list, active_cia_tuples)
     
     with open(file_path, 'w') as f:
@@ -182,7 +216,9 @@ def write_worker_script(filename, test_name, selected_gases_list, spec_type: Lit
         f.write("from numpy import array\n") 
         f.write("import netCDF4\n")
         f.write("from typing import Literal\n")
-        f.write("from tools import read_wnedges, generate_LBL_from_ExoMol_hdf5, find_index\n\n")
+        f.write("import sys\n")
+        f.write(f"sys.path.append('{cfg.ROOT_DIR}')\n") 
+        f.write("from util.tools import read_wnedges, generate_LBL_from_ExoMol_hdf5, find_index\n\n")
 
         # --- Dynamic Configuration Injection ---
         f.write(f"# --- Configuration injected by Manager ---\n")
@@ -324,7 +360,7 @@ for config, output_path, mon_path, LbL_path in zip(GAS_CONFIGS, output_path_list
         
     with open(exec_file_corrk, "w+") as f:
         # Note: wnedges here refers to the injected (potentially subset) array
-        idx_lower, idx_upper = find_index(wnedges[:-1], wnedges[1:], lower, upper)
+        idx_lower, idx_upper = find_index(wnedges[:-1], wnedges[1:], lower, upper, strict_band_edges=True)
         f.write('Ccorr_k ')
         f.write(f'-s {skeleton_file_name} ')
         f.write(f'-R {idx_lower} {idx_upper} ')
@@ -347,76 +383,94 @@ for config, output_path, mon_path, LbL_path in zip(GAS_CONFIGS, output_path_list
     os.system(f'rm {exec_file_corrk}')
 
 # 5. Include CIA (Hitran)
+generated_cia_files = [] # To store all generated segment files for Block 19
+
 if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
-    exec_file_CIA = f"corr_k_CIA_{test_name}.sh"
-    if os.path.exists(exec_file_CIA):
-        os.remove(exec_file_CIA)
+    # Iterate over each CIA pair
+    for id1, id2, pair_name in ACTIVE_CIA_TUPLES:
+        cia_conf = RELEVANT_CIA_CONFIGS.get(pair_name)
+        if not cia_conf:
+            print(f"Warning: Configuration for CIA pair {pair_name} missing.")
+            continue
 
-    with open(exec_file_CIA, "w+") as f:
-        # Update: unpack id1 and id2 from the tuple
-        for id1, id2, pair_name in ACTIVE_CIA_TUPLES:
-            cia_conf = RELEVANT_CIA_CONFIGS.get(pair_name)
-            if not cia_conf:
-                print(f"Warning: Configuration for CIA pair {pair_name} missing.")
-                continue
+        # 5a. Retrieve T_grid and P_grid
+        if 't_grid' in cia_conf:
+            T_cia_grid = np.array(cia_conf['t_grid'])
+        else:
+            raise ValueError(f"No t_grid found for {pair_name}")
+        if 'p_grid' in cia_conf:
+            P_cia_grid = np.array(cia_conf['p_grid'])
+        else:
+            P_cia_grid = np.array([1.0]) 
 
-            # 5a. Retrieve T_grid
-            if 't_grid' in cia_conf:
-                T_cia_grid = np.array(cia_conf['t_grid'])
-            else:
-                raise ValueError(f"No t_grid found for {pair_name}")
-            if 'p_grid' in cia_conf:
-                P_cia_grid = np.array(cia_conf['p_grid'])
-            else:
-                raise ValueError(f"No p_grid found for {pair_name}")
+        # 5b. Generate unique PT file (Per pair)
+        pt_cia_path = os.path.join(root, f'block19/pt_cia_{pair_name}_{test_name}')
+        if os.path.exists(pt_cia_path):
+            os.remove(pt_cia_path)
+        
+        with open(pt_cia_path, "w") as pt_file:
+            pt_file.write('*PTVAL\n')
+            for P_0 in P_cia_grid:
+                pt_file.write(f'{P_0 * 1e+5}')
+                for T in T_cia_grid:
+                    pt_file.write(f' {T}')
+                pt_file.write('\n')
+            pt_file.write('*END')
 
-            # 5b. Generate unique PT file
-            pt_cia_path = os.path.join(root, f'block19/pt_cia_{pair_name}_{test_name}')
-            if os.path.exists(pt_cia_path):
-                os.remove(pt_cia_path)
+        # 5c. Run corr_k in Segments (Separate script for each segment)
+        cia_file_path = os.path.join(root, cia_conf['cia_rel_path'], cia_conf['cia_file'])
+        
+        # Ensure wavenumber ranges are lists for iteration
+        cia_lowers = cia_conf['lower_wn']
+        cia_uppers = cia_conf['upper_wn']
+        if not isinstance(cia_lowers, list): cia_lowers = [cia_lowers]
+        if not isinstance(cia_uppers, list): cia_uppers = [cia_uppers]
+        
+        # Loop through segments
+        for seg_idx, (seg_lower, seg_upper) in enumerate(zip(cia_lowers, cia_uppers)):
             
-            with open(pt_cia_path, "w") as pt_file:
-                pt_file.write('*PTVAL\n')
-                for P_0 in P_cia_grid:
-                    pt_file.write(f'{P_0 * 1e+5}')
-                    for T in T_cia_grid:
-                        pt_file.write(f' {T}')
-                    pt_file.write('\n')
-                pt_file.write('*END')
-
-            # 5c. Run corr_k
-            cia_file_path = os.path.join(root, cia_conf['cia_rel_path'], cia_conf['cia_file'])
-            cia_lower = cia_conf['lower_wn']
-            cia_upper = cia_conf['upper_wn']
-
-            idx_lower, idx_upper = find_index(wnedges[:-1], wnedges[1:], int(cia_lower), int(cia_upper))
+            # Define file paths for this specific segment
+            cia_out_base = f"output_CIA_{pair_name}_{test_name}_seg{seg_idx}"
+            full_cia_out_path = f"{root}/block19/{cia_out_base}"
+            monitoring_cia_path = f"{root}/block19/monitoring_CIA_{pair_name}_{test_name}_seg{seg_idx}"
+            lbl_cia_path = f"{root}/block19/LBL_CIA_{pair_name}_{test_name}_seg{seg_idx}.nc"
             
-            cia_out_base = f"output_CIA_{pair_name}_{test_name}"
-            
-            # Modified line: Use dynamic id1 and id2 instead of hardcoded '2 2'
-            f.write(f'Ccorr_k -CIA {cia_file_path} -R {idx_lower} {idx_upper} ')
-            f.write(f'-F {pt_cia_path} -ct {id1} {id2} 1000.0 -i 1.0 -t 1.0e-2 ')
-            f.write(f'-s {skeleton_file_name} ')
-            if spec_type == 'sw':
-                f.write(f'+S {solar_path} ')                     # Solar spectrum
-            else:
-                f.write('+p'+' ')                                # Planckian Weighting
-            f.write('-lk ')
-            f.write(f'-o {root}/block19/{cia_out_base} ')
-            if os.path.exists(f'{root}/block19/{cia_out_base}'):
-                os.remove(f'{root}/block19/{cia_out_base}')
-            if os.path.exists(f'{root}/block19/{cia_out_base}.nc'):
-                os.remove(f'{root}/block19/{cia_out_base}.nc')
-            f.write(f'-m {root}/block19/monitoring_CIA_{pair_name}_{test_name} ')
-            if os.path.exists(f'{root}/block19/monitoring_CIA_{pair_name}_{test_name}'):
-                os.remove(f'{root}/block19/monitoring_CIA_{pair_name}_{test_name}')
-            f.write(f'-L {root}/block19/LBL_CIA_{pair_name}_{test_name}.nc\n')
-            if os.path.exists(f'{root}/block19/LBL_CIA_{pair_name}_{test_name}.nc'):
-                os.remove(f'{root}/block19/LBL_CIA_{pair_name}_{test_name}.nc')
+            # Add to list for Section 7 (Final Assembly)
+            generated_cia_files.append(full_cia_out_path) 
 
-    os.chmod(exec_file_CIA, 0o777)
-    os.system(f'./{exec_file_CIA}')
-    os.system(f'rm {exec_file_CIA}')
+            # Calculate indices
+            idx_lower, idx_upper = find_index(wnedges[:-1], wnedges[1:], int(seg_lower), int(seg_upper))
+            
+            # Cleanup old files
+            if os.path.exists(full_cia_out_path): os.remove(full_cia_out_path)
+            if os.path.exists(full_cia_out_path + '.nc'): os.remove(full_cia_out_path + '.nc')
+            if os.path.exists(monitoring_cia_path): os.remove(monitoring_cia_path)
+            if os.path.exists(lbl_cia_path): os.remove(lbl_cia_path)
+            
+            # Define specific execution script name for this segment
+            exec_file_CIA_seg = f"corr_k_CIA_{pair_name}_{test_name}_seg{seg_idx}.sh"
+            if os.path.exists(exec_file_CIA_seg):
+                os.remove(exec_file_CIA_seg)
+
+            # Write the single command script
+            with open(exec_file_CIA_seg, "w") as f:
+                f.write(f'Ccorr_k -CIA {cia_file_path} -R {idx_lower} {idx_upper} ')
+                f.write(f'-F {pt_cia_path} -ct {id1} {id2} 1000.0 -i 1.0 -t 1.0e-2 ')
+                f.write(f'-s {skeleton_file_name} ')
+                if spec_type == 'sw':
+                    f.write(f'+S {solar_path} ')                     # Solar spectrum
+                else:
+                    f.write('+p'+' ')                                # Planckian Weighting
+                f.write('-lk ')
+                f.write(f'-o {full_cia_out_path} ')
+                f.write(f'-m {monitoring_cia_path} ')
+                f.write(f'-L {lbl_cia_path}\n')
+
+            # Execute independent script
+            os.chmod(exec_file_CIA_seg, 0o777)
+            print(f"Running corr_k for CIA {pair_name} Segment {seg_idx}...")
+            os.system(f'./{exec_file_CIA_seg}')
+            os.system(f'rm {exec_file_CIA_seg}')
 
 # 6. Add UV lines to SW files
 output_path_xuv_list = []
@@ -429,13 +483,10 @@ if spec_type == 'sw' or ultra_hot_atmosphere:
         gas_id = config['gas_id']
         Molecule_str = config['molecule']
         
-        # uv_pt_file = uv_conf['pt_file_name']
-        # UV_gas_path = os.path.join(root, uv_conf['xuv_rel_path'])
         UV_gas = uv_conf['xuv_file']
         lower = uv_conf['lower_wn']
         upper = uv_conf['upper_wn']
         
-        # os.system(f'cp {UV_gas_path}{uv_pt_file} {root}/block5')
         pt_uv_path = os.path.join(root, f'block5',f'pt_uv_{Molecule_str}_{test_name}')
         if os.path.exists(pt_uv_path):
             os.remove(pt_uv_path)
@@ -534,14 +585,14 @@ with open(exec_file_sp, "w+") as f:
         f.write('y\n')
 
     # Block 19: Continuum (CIA)
-    if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
+    # Modified: Iterate over all generated segment files
+    if include_cia and len(generated_cia_files) > 0:
         f.write('19\n')
-        first_pair = ACTIVE_CIA_TUPLES[0][2] 
-        f.write(f'{root}/block19/output_CIA_{first_pair}_{test_name}\n')
+        f.write(f'{generated_cia_files[0]}\n')
         
-        for _, _, pair in ACTIVE_CIA_TUPLES[1:]:
+        for path in generated_cia_files[1:]:
              f.write('19\n')
-             f.write(f'{root}/block19/output_CIA_{pair}_{test_name}\n')
+             f.write(f'{path}\n')
              
     f.write('-1\n')
     f.write('EOF\n')
@@ -564,10 +615,24 @@ if os.path.exists(f'sp_b{band_num}_{test_name}_k'):
 # ==========================================
 # 3. Slurm Script Generator 
 # ==========================================
+def get_file_size_in_gb(file_path):
+    try:
+        size_bytes = os.path.getsize(file_path)
+        size_gb = size_bytes / (1024 * 1024 * 1024)
+        return size_gb
+    except OSError as e:
+        print(f"Error: {e}")
+        return None
 
-def write_slurm_script(job_name, case_name_list):
+def write_slurm_script(job_name, case_name_list, gas_lbl_file_list):
     slurm_path = os.path.join(cfg.SLURM_DIR, f'{job_name}.sh')
-    ncores = 8 
+    cache_size_gb = 0.0
+    for gas_lbl_file in gas_lbl_file_list:
+        full_path = os.path.join(cfg.ROOT_DIR, gas_lbl_file)
+        size_gb = get_file_size_in_gb(full_path)
+        cache_size_gb += size_gb if size_gb is not None else 0.0
+    gb_per_core = 4 # Wuzhen cluster
+    ncores = int(np.ceil(cache_size_gb / gb_per_core)) + 1
     with open(slurm_path, 'w') as f:
         f.write('#!/bin/bash\n')
         f.write(f'#SBATCH --job-name={job_name}\n')
@@ -595,17 +660,16 @@ if __name__ == "__main__":
     # ----------------------------------------
     # Select gases for this run
     # ----------------------------------------
-    SELECTED_MOLECULES = ['CO2']
+    SELECTED_MOLECULES = ['H2O','N2']
     
     # Validate selection against Gas Library
     for m in SELECTED_MOLECULES:
         if m not in cfg.GAS_LIBRARY:
             raise ValueError(f"Molecule {m} not found in config_data.GAS_LIBRARY")
             
-    primary_gas = SELECTED_MOLECULES[0]
     num_bands = len(cfg.WNEDGES) - 1
     job_identifier = f"sp_b{num_bands}_{cfg.STAR_NAME}"
-    test_name = "CO2_T62xP22_001_nk20"
+    test_name = "H2O_N2" #"CO2_T62xP22_001_nk20"
     
     print(f"Generating scripts for: {test_name}")
     print(f"Selected Gases: {SELECTED_MOLECULES}")
@@ -616,7 +680,11 @@ if __name__ == "__main__":
     
     # Generate Slurm Submission Script
     case_name_list = [test_name]
-    write_slurm_script(job_identifier, case_name_list)
+    gas_lbl_file_list = []
+    for gas in SELECTED_MOLECULES:
+        gas_conf = cfg.GAS_LIBRARY[gas]
+        gas_lbl_file_list.append(gas_conf['gas_abs_config']['hdf5_rel_path'])
+    write_slurm_script(job_identifier, case_name_list,gas_lbl_file_list)
     
     slurm_file = f'{job_identifier}.sh'
     os.chmod(os.path.join(cfg.SLURM_DIR, slurm_file), 0o755)
