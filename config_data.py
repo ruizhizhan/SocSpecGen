@@ -102,7 +102,27 @@ GAS_LIBRARY = {
         },
         'uv_config': None
     },
+    'O2': {
+        'molecule': '16O2',
+        'gas_id': '7',
+        'gas_abs_config': {
+            'hdf5_rel_path': 'ExoMol/hdf5/O2/O2_SWYT_1.0-20000.0_T62xP22_001.h5',
+            'datasource': 'O2_T62xP22_001',
+            'lower_wn': 1.0,
+            'upper_wn': 20000.0,
+        },
+        'uv_config': { # ExoMol/16O2/PhoMol/O2.uvxsc
+            'pt_file_name': 'pt_o2_uv',
+            'xuv_rel_path': 'ExoMol/16O2/PhoMol/',
+            'xuv_file': 'O2.uvxsc',
+            'lower_wn': 1e7/500, # approx 20000 cm-1
+            'upper_wn': 1e7/50, # approx 200000 cm-1
+            't_grid': np.arange(100,4501,100),
+            'p_grid': [1e-6,1e-5,1e-4,1e-3], # in bar, from 0.1 Pa to 100 Pa
+        }
+    },
     # Add other gases (H2O, CH4, etc.) here...
+    # SiO2 custom T grid
 }
 
 # ==========================================
@@ -148,7 +168,7 @@ CIA_LIBRARY = { # single pressure grid for each CIA
 # ==========================================
 # 4. Simulation Parameters
 # ==========================================
-STAR_NAME = '55CancriA'
+STAR_NAME = 'Trappist-1'
 NUM_KTERM = 20
 INCLUDE_CIA = True
 INCLUDE_SOLAR_SED = True

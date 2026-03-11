@@ -379,6 +379,7 @@ for config, output_path, mon_path, LbL_path in zip(GAS_CONFIGS, output_path_list
         f.write('-np 1')
 
     os.chmod(exec_file_corrk, 0o777)
+    os.system(f'cat {exec_file_corrk}')
     os.system(f'./{exec_file_corrk}')
     os.system(f'rm {exec_file_corrk}')
 
@@ -469,6 +470,7 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
             # Execute independent script
             os.chmod(exec_file_CIA_seg, 0o777)
             print(f"Running corr_k for CIA {pair_name} Segment {seg_idx}...")
+            os.system(f'cat {exec_file_CIA_seg}')
             os.system(f'./{exec_file_CIA_seg}')
             os.system(f'rm {exec_file_CIA_seg}')
 
@@ -537,6 +539,7 @@ if spec_type == 'sw' or ultra_hot_atmosphere:
             f.write(f'-o {output_path_xuv} -m {mon_path_xuv} -L {LBL_path_xuv} -np 1')
 
         os.chmod(exec_file_corrk_xuv, 0o777)
+        os.system(f'cat {exec_file_corrk_xuv}')
         os.system(f'./{exec_file_corrk_xuv}')
         os.system(f'rm {exec_file_corrk_xuv}')
         output_path_xuv_list.append(output_path_xuv)
@@ -598,6 +601,7 @@ with open(exec_file_sp, "w+") as f:
     f.write('EOF\n')
 
 os.chmod(exec_file_sp, 0o777)
+os.system(f'cat {exec_file_sp}')
 os.system(f'./{exec_file_sp}')
 os.system(f'rm {exec_file_sp}')
 
@@ -632,7 +636,7 @@ def write_slurm_script(job_name, case_name_list, gas_lbl_file_list):
         size_gb = get_file_size_in_gb(full_path)
         cache_size_gb += size_gb if size_gb is not None else 0.0
     gb_per_core = 4 # Wuzhen cluster
-    ncores = int(np.ceil(cache_size_gb / gb_per_core)) + 1
+    ncores = int(np.ceil(cache_size_gb / gb_per_core))+3
     with open(slurm_path, 'w') as f:
         f.write('#!/bin/bash\n')
         f.write(f'#SBATCH --job-name={job_name}\n')
@@ -660,7 +664,7 @@ if __name__ == "__main__":
     # ----------------------------------------
     # Select gases for this run
     # ----------------------------------------
-    SELECTED_MOLECULES = ['H2O','N2']
+    SELECTED_MOLECULES = ['H2O']
     
     # Validate selection against Gas Library
     for m in SELECTED_MOLECULES:
@@ -668,18 +672,18 @@ if __name__ == "__main__":
             raise ValueError(f"Molecule {m} not found in config_data.GAS_LIBRARY")
             
     num_bands = len(cfg.WNEDGES) - 1
-    job_identifier = f"sp_b{num_bands}_{cfg.STAR_NAME}"
-    test_name = "H2O_N2" #"CO2_T62xP22_001_nk20"
+    test_name = "H2O_T62xP22_001_nk20" #"CO2_T62xP22_001_nk20"
+    job_identifier = f"sp_b{num_bands}_{cfg.STAR_NAME}_{test_name}"
     
     print(f"Generating scripts for: {test_name}")
     print(f"Selected Gases: {SELECTED_MOLECULES}")
     
     # Generate Python Worker Scripts
-    write_worker_script(f"{test_name}_lw.py", test_name, SELECTED_MOLECULES, 'lw')
-    write_worker_script(f"{test_name}_sw.py", test_name, SELECTED_MOLECULES, 'sw')
+    write_worker_script(f"{job_identifier}_lw.py", test_name, SELECTED_MOLECULES, 'lw')
+    write_worker_script(f"{job_identifier}_sw.py", test_name, SELECTED_MOLECULES, 'sw')
     
     # Generate Slurm Submission Script
-    case_name_list = [test_name]
+    case_name_list = [job_identifier]
     gas_lbl_file_list = []
     for gas in SELECTED_MOLECULES:
         gas_conf = cfg.GAS_LIBRARY[gas]
