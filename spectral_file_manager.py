@@ -664,7 +664,7 @@ if __name__ == "__main__":
     # ----------------------------------------
     # Select gases for this run
     # ----------------------------------------
-    SELECTED_MOLECULES = ['H2O']
+    SELECTED_MOLECULES = ['O2','H2O','CO2']
     
     # Validate selection against Gas Library
     for m in SELECTED_MOLECULES:
@@ -672,7 +672,7 @@ if __name__ == "__main__":
             raise ValueError(f"Molecule {m} not found in config_data.GAS_LIBRARY")
             
     num_bands = len(cfg.WNEDGES) - 1
-    test_name = "H2O_T62xP22_001_nk20" #"CO2_T62xP22_001_nk20"
+    test_name = "o2co2h2o" #"CO2_T62xP22_001_nk20"
     job_identifier = f"sp_b{num_bands}_{cfg.STAR_NAME}_{test_name}"
     
     print(f"Generating scripts for: {test_name}")

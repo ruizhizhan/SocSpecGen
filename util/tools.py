@@ -6,6 +6,54 @@ import netCDF4
 from astropy.convolution import convolve_fft
 from astropy.convolution import Gaussian1DKernel
 
+def compute_gaussian(n_hem):
+    """
+    calculate the Gaussian points and weights
+    
+    input:
+    n_hem -- the number of Gaussian points
+    
+    output:
+    sin_hem -- the Gaussian points
+    wts_hem -- the Gaussian weights
+    """
+    # check if nhem is an integer
+    if not isinstance(n_hem, int):
+        raise ValueError('n_hem must be an integer')
+    sin_hem = np.zeros(n_hem)
+    wts_hem = np.zeros(n_hem)
+    converg = 1.0E-10  # convergence criterion
+    itermax = 10
+    n = 2 * n_hem
+    for i in range(1, n_hem + 1):
+        z = np.cos(np.pi * (i - 0.25) / (n + 0.5))
+        
+        for iter in range(itermax):
+            p1 = 1.0
+            p2 = 0.0
+            
+            for j in range(1, n + 1):
+                p3 = p2
+                p2 = p1
+                p1 = ((2.0 * j - 1.0) * z * p2 - (j - 1.0) * p3) / j
+                
+            pp = n * (z * p1 - p2) / (z * z - 1.0)
+            z1 = z
+            z = z1 - p1 / pp
+            
+            if np.abs(z - z1) < converg:
+                break
+        else:
+            # if the loop completes without breaking, raise an error
+            raise ValueError('Abscissas failed to converge in itermax iterations')
+        
+        sin_hem[i - 1] = z
+        wts_hem[i - 1] = 2.0 / ((1.0 - z * z) * pp * pp)
+    
+    rtn_gw = np.concatenate((wts_hem, wts_hem[::-1]))
+    rtn_gw = rtn_gw / np.sum(rtn_gw)
+    return rtn_gw
+
 def rebin_spectrum(wvls, flux, R, w_sample=1):
     '''
     Smears a model spectrum with a gaussian kernel to the given resolution, R.

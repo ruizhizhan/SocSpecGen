@@ -117,7 +117,7 @@ GAS_LIBRARY = {
             'xuv_file': 'O2.uvxsc',
             'lower_wn': 1e7/500, # approx 20000 cm-1
             'upper_wn': 1e7/50, # approx 200000 cm-1
-            't_grid': np.arange(100,4501,100),
+            't_grid': np.arange(200,4201,800), # uv no need to be such high res
             'p_grid': [1e-6,1e-5,1e-4,1e-3], # in bar, from 0.1 Pa to 100 Pa
         }
     },
@@ -162,19 +162,27 @@ CIA_LIBRARY = { # single pressure grid for each CIA
         'upper_wn': [2830.],
         't_grid': [250,300,350],
         'p_grid': [1.0]
+    },
+    'O2-O2':{
+        'cia_rel_path': 'hitran/O2-O2_2024',
+        'cia_file': 'O2-O2_2024.cia',
+        'lower_wn': [1150.000,7545,7583,9091.0000,10512.000,12600.120,14206.000,15290.000,15292.000,16645.000,16658.000,16668.000,16780.000,16791.000,20000.000],
+        'upper_wn': [1950.000,8355,8355,9596.0000,11228.000,13839.642,14898.000,16664.000,16664.000,29784.000,29748.000,29802.000,29757.000,29837.000,33670.000],
+        't_grid': [150,200,250,300],
+        'p_grid': [1.0]
     }
 }
 
 # ==========================================
 # 4. Simulation Parameters
 # ==========================================
-STAR_NAME = 'Trappist-1'
+STAR_NAME = 'Trappist-1_sphinx'
 NUM_KTERM = 20
 INCLUDE_CIA = True
 INCLUDE_SOLAR_SED = True
 
 # New Option: Ultra Hot Atmosphere (Calculate UV/Rayleigh for 'lw' if True)
-ULTRA_HOT_ATMOSPHERE = True 
+ULTRA_HOT_ATMOSPHERE = False 
 
 # ==========================================
 # 5. Wavenumber Edges Generation
