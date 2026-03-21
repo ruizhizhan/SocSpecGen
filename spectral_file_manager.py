@@ -284,7 +284,7 @@ for config in GAS_CONFIGS:
         file.write('*END')
 
 # 2. Reference PT file
-ref_pt_path = os.path.join(root, f'block5/ref_pt_file{test_name}')
+ref_pt_path = os.path.join(root, f'block5/ref_pt_file_{test_name}')
 if os.path.exists(ref_pt_path):
     os.remove(ref_pt_path)
 with open(ref_pt_path, "a") as file:
@@ -365,7 +365,7 @@ for config, output_path, mon_path, LbL_path in zip(GAS_CONFIGS, output_path_list
         f.write(f'-s {skeleton_file_name} ')
         f.write(f'-R {idx_lower} {idx_upper} ')
         f.write(f'-F {root}/block5/pt_file_{test_name}_{gas_id} ')
-        f.write(f'-r {root}/block5/ref_pt_file{test_name} ')
+        f.write(f'-r {root}/block5/ref_pt_file_{test_name} ')
         f.write(f'-l {gas_id} 1.0e5 ') # a limit for grey gas approximation
         f.write(f'-n {num_kterm} ')
         f.write('-lk'+' ') 
@@ -616,6 +616,43 @@ if os.path.exists(f'sp_b{band_num}_{test_name}_k'):
     os.system(f'mv sp_b{band_num}_{test_name}_k {os.path.join(final_dir, outputfilename)}_k')
 """)
 
+# Additional: modify H2O
+def modify_h2o_to_cfc113(filename):
+    file_path = os.path.join(cfg.SLURM_DIR, filename)
+    # 使用原始多行字符串 (r"")，这样正则表达式里的 \s, \b 等就不会被转义
+    append_script = r"""
+
+# 9. Post-processing: Modify H2O to CFC113 in the final spectral file
+import re
+outputfile = os.path.join(final_dir, outputfilename)
+
+if os.path.exists(outputfile):
+    with open(outputfile, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    # 1. 查找 "1 [若干空格] Water Vapour"，将 1 改为 16，Water Vapour 改为 CFC113，并保留中间的空格 (\1 代表第一个括号匹配到的空格)
+    content = re.sub(r'\b1(\s+)Water Vapour', r'16\1CFC113', content)
+    
+    # 2. 将文件中其他所有的 "Water Vapour" 修改成 "CFC113"
+    content = content.replace("Water Vapour", "CFC113")
+
+    # 3. 将 "Index of water =     1" 修改为 "Index of water =     0"
+    # 使用正则 \s* 兼容等号两边可能出现的不定数量的空格，\g<1> 代表保留前面的 "Index of water = [空格]" 部分
+    content = re.sub(r'(Index of water\s*=\s*)1\b', r'\g<1>0', content)
+
+    # 将修改后的内容写回文件
+    with open(outputfile, 'w', encoding='utf-8') as f:
+        f.write(content)
+else:
+    print(f"File not found: {outputfile}")
+"""
+
+    # 以追加模式('a')打开目标 .py 文件，并将代码写入到文件末尾
+    with open(file_path, 'a', encoding='utf-8') as f:
+        # 写入前先加两行换行，确保不会和原文件最后一行代码粘连
+        f.write('\n\n' + append_script)
+    print("Warning: Post-processing code to modify H2O to CFC113 has been appended to the worker script. Please ensure CFC113 in gas_list_pcf.F90 has been modified.")
+
 # ==========================================
 # 3. Slurm Script Generator 
 # ==========================================
@@ -664,7 +701,7 @@ if __name__ == "__main__":
     # ----------------------------------------
     # Select gases for this run
     # ----------------------------------------
-    SELECTED_MOLECULES = ['O2','H2O','CO2']
+    SELECTED_MOLECULES = cfg.MOLEULES_TO_INCLUDE
     
     # Validate selection against Gas Library
     for m in SELECTED_MOLECULES:
@@ -672,7 +709,7 @@ if __name__ == "__main__":
             raise ValueError(f"Molecule {m} not found in config_data.GAS_LIBRARY")
             
     num_bands = len(cfg.WNEDGES) - 1
-    test_name = "o2co2h2o" #"CO2_T62xP22_001_nk20"
+    test_name = cfg.TEST_NAME
     job_identifier = f"sp_b{num_bands}_{cfg.STAR_NAME}_{test_name}"
     
     print(f"Generating scripts for: {test_name}")
@@ -682,6 +719,11 @@ if __name__ == "__main__":
     write_worker_script(f"{job_identifier}_lw.py", test_name, SELECTED_MOLECULES, 'lw')
     write_worker_script(f"{job_identifier}_sw.py", test_name, SELECTED_MOLECULES, 'sw')
     
+    # if 'H2O' in SELECTED_MOLECULES, modify H2O to CFC113
+    if 'H2O' in SELECTED_MOLECULES:
+        modify_h2o_to_cfc113(f"{job_identifier}_lw.py")
+        modify_h2o_to_cfc113(f"{job_identifier}_sw.py")
+        
     # Generate Slurm Submission Script
     case_name_list = [job_identifier]
     gas_lbl_file_list = []

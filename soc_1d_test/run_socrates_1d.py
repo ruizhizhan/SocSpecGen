@@ -13,36 +13,50 @@ from util.tools import compute_gaussian
 from read_write_socrates_netcdf import write_latlon, read_latlon
 GCM_root = f'/work/home/ac9b0k6rio/isca_17/data'
 
-
-def write_input(soc_base,file_type,ps,Ts,p,pmid,T,Tmid,
-                co2_mmr = 0,co_mmr = 0,sio_mmr = 0,n2_mmr = 0,h2o_mmr = 0,real_h2o = 0,o2_mmr=0,
-                stoa = 0, sza = 90.0):
+def write_input(soc_base, file_type, ps, Ts, p, pmid, T, Tmid,
+                co2_mmr=0, co_mmr=0, o2_mmr=0, n2_mmr=0, n2o_mmr=0, ch4_mmr=0, 
+                so2_mmr=0, nh3_mmr=0, h2_mmr=0, h2s_mmr=0, cfc11_mmr=0, cfc12_mmr=0,
+                h2o_mmr=0, sio_mmr=0, mgo_mmr=0, sio2_mmr=0, # Proxy gases
+                real_h2o=0, stoa=0, sza=90.0):
     """
-        Write input files for socrates offline 1d runs.
+    Write input files for socrates offline 1d runs.
     """
-    write_latlon('.', Tmid, soc_base, 'tl', 'tl', 'K','Temperature on levels', p_lev=pmid)
-    write_latlon('.', T, soc_base, 't', 't', 'K','Temperature', p_lev=p)
+    write_latlon('.', Tmid, soc_base, 'tl', 'tl', 'K', 'Temperature on levels', p_lev=pmid)
+    write_latlon('.', T, soc_base, 't', 't', 'K', 'Temperature', p_lev=p)
+    
     if file_type == 'lw':
-        write_latlon('.', np.asarray([Ts]), soc_base, 'tstar', 'tstar', 'K','Surface temperature', p_lev=np.asarray([ps]))
+        write_latlon('.', np.asarray([Ts]), soc_base, 'tstar', 'tstar', 'K', 'Surface temperature', p_lev=np.asarray([ps]))
+        
     if file_type == 'sw':
-        write_latlon('.', np.asarray([0.]), soc_base, 'sazim', 'sazim', 'degree','Solar azimuthal angle')
-        write_latlon('.', np.asarray([stoa]), soc_base, 'stoa', 'stoa', 'W.m-2','Solar Irradiance')
-        write_latlon('.', np.asarray([sza]), soc_base, 'szen', 'szen', 'Degrees','Solar zenith angle')
-    write_latlon('.', 0., soc_base, 'surf', 'alb', 'None','Albedo weights', basis=np.array([1.])) 
-    if co2_mmr > 0: 
-        write_latlon('.',np.ones(p.shape)*co2_mmr, soc_base, 'co2','CO2', 'None', 'CO2 MMR', p_lev=p)
-    if co_mmr > 0:
-        write_latlon('.',np.ones(p.shape)*co_mmr, soc_base, 'co','CO', 'None', 'CO MMR', p_lev=p)
-    if sio_mmr > 0:
-        write_latlon('.',np.ones(p.shape)*sio_mmr, soc_base, 'hcfc22','HCFC22', 'None', 'HCFC22 MMR', p_lev=p)
-    if n2_mmr > 0:
-        write_latlon('.',np.ones(p.shape)*n2_mmr, soc_base, 'n2','N2', 'None', 'N2 MMR', p_lev=p)
-    if h2o_mmr > 0:
-        write_latlon('.',np.ones(p.shape)*h2o_mmr, soc_base, 'cfc113','CFC113', 'None', 'CFC113 MMR', p_lev=p)
-    if o2_mmr > 0:
-        write_latlon('.',np.ones(p.shape)*o2_mmr, soc_base, 'o2','O2', 'None', 'O2 MMR', p_lev=p)
+        write_latlon('.', np.asarray([0.]), soc_base, 'sazim', 'sazim', 'degree', 'Solar azimuthal angle')
+        write_latlon('.', np.asarray([stoa]), soc_base, 'stoa', 'stoa', 'W.m-2', 'Solar Irradiance')
+        write_latlon('.', np.asarray([sza]), soc_base, 'szen', 'szen', 'Degrees', 'Solar zenith angle')
+        
+    write_latlon('.', 0., soc_base, 'surf', 'alb', 'None', 'Albedo weights', basis=np.array([1.])) 
+    
+    # --- Standard Gases ---
+    if co2_mmr > 0: write_latlon('.', np.ones(p.shape)*co2_mmr, soc_base, 'co2', 'CO2', 'None', 'CO2 MMR', p_lev=p)
+    if co_mmr > 0:  write_latlon('.', np.ones(p.shape)*co_mmr, soc_base, 'co', 'CO', 'None', 'CO MMR', p_lev=p)
+    if o2_mmr > 0:  write_latlon('.', np.ones(p.shape)*o2_mmr, soc_base, 'o2', 'O2', 'None', 'O2 MMR', p_lev=p)
+    if n2_mmr > 0:  write_latlon('.', np.ones(p.shape)*n2_mmr, soc_base, 'n2', 'N2', 'None', 'N2 MMR', p_lev=p)
+    if n2o_mmr > 0: write_latlon('.', np.ones(p.shape)*n2o_mmr, soc_base, 'n2o', 'N2O', 'None', 'N2O MMR', p_lev=p)
+    if ch4_mmr > 0: write_latlon('.', np.ones(p.shape)*ch4_mmr, soc_base, 'ch4', 'CH4', 'None', 'CH4 MMR', p_lev=p)
+    if so2_mmr > 0: write_latlon('.', np.ones(p.shape)*so2_mmr, soc_base, 'so2', 'SO2', 'None', 'SO2 MMR', p_lev=p)
+    if nh3_mmr > 0: write_latlon('.', np.ones(p.shape)*nh3_mmr, soc_base, 'nh3', 'NH3', 'None', 'NH3 MMR', p_lev=p)
+    if h2_mmr > 0:  write_latlon('.', np.ones(p.shape)*h2_mmr, soc_base, 'h2', 'H2', 'None', 'H2 MMR', p_lev=p)
+    if h2s_mmr > 0: write_latlon('.', np.ones(p.shape)*h2s_mmr, soc_base, 'h2s', 'H2S', 'None', 'H2S MMR', p_lev=p)
+    if cfc11_mmr > 0: write_latlon('.', np.ones(p.shape)*cfc11_mmr, soc_base, 'cfc11', 'CFC11', 'None', 'CFC11 MMR', p_lev=p)
+    if cfc12_mmr > 0: write_latlon('.', np.ones(p.shape)*cfc12_mmr, soc_base, 'cfc12', 'CFC12', 'None', 'CFC12 MMR', p_lev=p)
+
+    # --- Proxy Gases (Mapped to CFCs/HFCs slots in SOCRATES) ---
+    if h2o_mmr > 0:  write_latlon('.', np.ones(p.shape)*h2o_mmr, soc_base, 'cfc113', 'CFC113', 'None', 'CFC113 MMR (H2O Proxy)', p_lev=p)
+    if sio_mmr > 0:  write_latlon('.', np.ones(p.shape)*sio_mmr, soc_base, 'hcfc22', 'HCFC22', 'None', 'HCFC22 MMR (SiO Proxy)', p_lev=p)
+    if mgo_mmr > 0:  write_latlon('.', np.ones(p.shape)*mgo_mmr, soc_base, 'hfc125', 'HFC125', 'None', 'HFC125 MMR (MgO Proxy)', p_lev=p)
+    if sio2_mmr > 0: write_latlon('.', np.ones(p.shape)*sio2_mmr, soc_base, 'hfc134a', 'HFC134A', 'None', 'HFC134A MMR (SiO2 Proxy)', p_lev=p)
+
+    # --- Native H2O (3D Array) ---
     if isinstance(real_h2o, np.ndarray):
-        write_latlon('.',real_h2o, soc_base, 'q','H2O', 'None', 'H2O MMR', p_lev=p)
+        write_latlon('.', real_h2o, soc_base, 'q', 'H2O', 'None', 'H2O MMR Array', p_lev=p)
 
 def get_band_number(spectral_file_name):
     match = re.search(r'_b(\d+)', spectral_file_name)
@@ -187,19 +201,32 @@ def read_nc(case_name,i,j):
 
 
 if __name__ == "__main__":
-    # set atmos composition here:
-    n_co2 = 0; n_co = 0; n_h2o = 0.0; n_n2 = 0.0; n_sio = 0.0; n_o2 = 1.0
+    # 1. Set atmos composition (Volume Mixing Ratios or Moles) here
+    gas_moles = {
+        'co2': 0.0, 'co': 0.0, 'o2': 0.0, 'n2': 0.0, 'n2o': 0.0, 'ch4': 0.0,
+        'so2': 0.0, 'nh3': 0.0, 'h2': 0.0, 'h2s': 0.0, #'cfc11': 0.0, 'cfc12': 0.0,
+        'h2o': 0.0, 'sio': 0.0, 'mgo': 1.0, 'sio2': 0.0
+    }
     
-    M_co2 = 44e-3; M_co = 28e-3; M_h2o = 18e-3; M_n2 = 28e-3; M_sio = 44e-3; M_o2 = 32e-3
-    mmw = n_co2*M_co2+n_co*M_co+n_h2o*M_h2o+n_n2*M_n2+n_sio*M_sio+n_o2*M_o2
-    co2_mmr = n_co2*M_co2/mmw; co_mmr = n_co*M_co/mmw; h2o_mmr = n_h2o*M_h2o/mmw; n2_mmr = n_n2*M_n2/mmw; sio_mmr = n_sio*M_sio/mmw; o2_mmr = n_o2*M_o2/mmw
+    # 2. Molecular Weights (kg/mol)
+    gas_masses = {
+        'co2': 44.010e-3, 'co': 28.010e-3, 'o2': 31.999e-3, 'n2': 28.013e-3, 
+        'n2o': 44.013e-3, 'ch4': 16.043e-3, 'so2': 64.066e-3, 'nh3': 17.031e-3, 
+        'h2': 2.016e-3, 'h2s': 34.082e-3, #'cfc11': 137.368e-3, 'cfc12': 120.914e-3,
+        'h2o': 18.015e-3, 'sio': 44.085e-3, 'mgo': 40.304e-3, 'sio2': 60.084e-3
+    }
+
+    # 3. Calculate Mean Molecular Weight (mmw) and MMRs automatically
+    mmw = sum(gas_moles[g] * gas_masses[g] for g in gas_moles)
+    
+    mmr_dict = {f"{g}_mmr": (gas_moles[g] * gas_masses[g] / mmw) for g in gas_moles}
     
     # setup the 1D calculation
     soc_base = 'test'
     spectral_root = f'/work/home/ac9b0k6rio/SocSpecGen/spectral_files'
     star_name = 'Trappist-1_sphinx'
-    spectral_file_name_lw = f"sp_lw_b96_Trappist-1_sphinx_o2co2h2o"
-    spectral_file_name_sw = f"sp_sw_b94_Trappist-1_sphinx_o2co2h2o"
+    spectral_file_name_lw = f"sp_lw_b96_Trappist-1_sphinx_MgO_T62xP22_001"
+    spectral_file_name_sw = f"sp_sw_b94_Trappist-1_sphinx_MgO_T62xP22_001"
     
     band_n_sw = get_band_number(spectral_file_name_sw)
     spectral_file_sw = os.path.join(spectral_root,f"sp_b{band_n_sw}",spectral_file_name_sw)
@@ -218,21 +245,25 @@ if __name__ == "__main__":
     else:
         pass
     
-    write_input(f'{soc_base}','lw',ps,t_surf,p_full,p_half,t_full,t_half,co_mmr=co_mmr,co2_mmr=co2_mmr,sio_mmr=sio_mmr,n2_mmr=n2_mmr,h2o_mmr=h2o_mmr,o2_mmr=o2_mmr)
+    write_input(f'{soc_base}', 'lw', ps, t_surf, p_full, p_half, t_full, t_half, **mmr_dict)
     
-    run_str = f'Cl_run_cdf -B {soc_base} -s {spectral_file_lw} -R 1 {band_n_lw} -I -g 4 -C 5 -t 12 -v 13 -q -z 1 -u'
+    with open(spectral_file_lw, 'r', errors='ignore') as f:
+        has_block_18 = '*BLOCK: TYPE =   18' in f.read()
+
+    run_str = f"Cl_run_cdf -B {soc_base} -s {spectral_file_lw} -R 1 {band_n_lw} -I -g 4 -C 5 -t 12 -v 13 -q -z 1{' -u' if has_block_18 else ''}"
     os.system(run_str)
     plev, uflux = read_latlon('.',f'{soc_base}','uflx','uflx')
     olr = uflux[0]
-    print(f"OLR: {olr:.4e}, {t_full[-1]**4*5.67e-8:.4e}")
+    print(f"OLR: {olr:.4e}, TOA Temp flux {t_full[-1]**4*5.67e-8:.4e}, surf Temp flux: {t_surf**4*5.67e-8:.4e}")
     print(uflux)
     os.system(f'rm *{soc_base}.*')
     
-    if soc_coszen > 1e-10 and soc_toa_sw_down > 0: # SW calculation only for dayside hemisphere
-        write_input(f'{soc_base}','sw',ps,t_surf,p_full,p_half,t_full,t_half,
-                    co_mmr=co_mmr,co2_mmr=co2_mmr,sio_mmr=sio_mmr,n2_mmr=n2_mmr,h2o_mmr=h2o_mmr,o2_mmr=o2_mmr,
-                    stoa = soc_toa_sw_down/soc_coszen, sza = abs(np.arccos(soc_coszen)*180/np.pi))
-        run_str_sw = f'Cl_run_cdf -B {soc_base} -s {spectral_file_sw} -R 1 {band_n_sw} -S -r -g 4 -C 5 -t 16 -v 13 -z 1 -u'
+    if soc_coszen > 1e-10 and soc_toa_sw_down > 0:
+        write_input(f'{soc_base}', 'sw', ps, t_surf, p_full, p_half, t_full, t_half, **mmr_dict, 
+                    stoa=soc_toa_sw_down/soc_coszen, sza=abs(np.arccos(soc_coszen)*180/np.pi))
+        with open(spectral_file_sw, 'r', errors='ignore') as f:
+            has_block_18 = '*BLOCK: TYPE =   18' in f.read()
+        run_str_sw = f"Cl_run_cdf -B {soc_base} -s {spectral_file_sw} -R 1 {band_n_sw} -S -r -g 4 -C 5 -t 16 -v 13 -z 1{' -u' if has_block_18 else ''}"
         os.system(run_str_sw)
         plev, dflux = read_latlon('.',f'{soc_base}','vflx','vflx')
         ssw = dflux[-1]
