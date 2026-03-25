@@ -218,7 +218,7 @@ def write_worker_script(filename, test_name, selected_gases_list, spec_type: Lit
         f.write("from typing import Literal\n")
         f.write("import sys\n")
         f.write(f"sys.path.append('{cfg.ROOT_DIR}')\n") 
-        f.write("from util.tools import read_wnedges, generate_LBL_from_ExoMol_hdf5, find_index\n\n")
+        f.write("from util.tools import read_wnedges, generate_LBL_from_ExoMol_hdf5, find_index, fix_socrates_nan\n\n")
 
         # --- Dynamic Configuration Injection ---
         f.write(f"# --- Configuration injected by Manager ---\n")
@@ -614,6 +614,10 @@ print(f"Moving {outputfilename} to {final_dir}")
 os.system(f'mv sp_b{band_num}_{test_name} {os.path.join(final_dir, outputfilename)}')
 if os.path.exists(f'sp_b{band_num}_{test_name}_k'):
     os.system(f'mv sp_b{band_num}_{test_name}_k {os.path.join(final_dir, outputfilename)}_k')
+
+# 9. check and modify NaNs in the final spectral file (if any)
+fix_socrates_nan(f"{os.path.join(final_dir, outputfilename)}")
+fix_socrates_nan(f"{os.path.join(final_dir, outputfilename)}_k")
 """)
 
 # Additional: modify H2O
@@ -672,7 +676,7 @@ def write_slurm_script(job_name, case_name_list, gas_lbl_file_list):
         full_path = os.path.join(cfg.ROOT_DIR, gas_lbl_file)
         size_gb = get_file_size_in_gb(full_path)
         cache_size_gb += size_gb if size_gb is not None else 0.0
-    gb_per_core = 4 # Wuzhen cluster
+    gb_per_core = 2 # Wuzhen cluster
     ncores = int(np.ceil(cache_size_gb / gb_per_core))+3
     with open(slurm_path, 'w') as f:
         f.write('#!/bin/bash\n')
