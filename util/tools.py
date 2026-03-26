@@ -1,7 +1,7 @@
 import numpy as np
 import os
 import netCDF4
-
+import re
 
 from astropy.convolution import convolve_fft
 from astropy.convolution import Gaussian1DKernel
@@ -375,3 +375,63 @@ def generate_LBL_from_ExoMol_hdf5(root, hdf5_path,Molecule_str,datasource,update
         os.remove(LbL_path) 
     os.system(f"cp {ref_LBL} {LbL_path}")
     return output_path,mon_path,LbL_path,T_grid,P_grid
+
+
+def fix_socrates_nan(input_file, fill_value="1.00000E-45"):
+    """
+    读取 SOCRATES _k 文件，将所有的 NaN 替换为安全的极小正数。
+    如果发现 NaN，原始文件将被重命名备份，修复后的数据将直接写入原始文件路径。
+    
+    参数:
+    input_file (str): 原始 _k 文件的路径。
+    fill_value (str): 用于替换 NaN 的字符串。默认使用 1.00000E-45。
+    """
+    base, ext = os.path.splitext(input_file)
+    backup_file = f"{base}_nan{ext}"
+
+    # 编译正则表达式，匹配独立的 NaN/nan/NAN
+    nan_pattern = re.compile(r'\b[Nn][Aa][Nn]\b')
+    
+    nan_count = 0
+    fixed_lines = []
+
+    try:
+        # 读取原始文件并处理内容
+        with open(input_file, 'r') as f_in:
+            for line in f_in:
+                if nan_pattern.search(line):
+                    # 统计该行有多少个 NaN
+                    matches = len(nan_pattern.findall(line))
+                    nan_count += matches
+                    
+                    # 替换 NaN 为极小值
+                    fixed_line = nan_pattern.sub(fill_value, line)
+                    fixed_lines.append(fixed_line)
+                else:
+                    fixed_lines.append(line)
+                    
+        print(f"扫描完成: {input_file}")
+        
+        # 只有在发现 NaN 时才进行备份和覆盖写入
+        if nan_count > 0:
+            # 1. 将原文件重命名为备份文件
+            # 如果备份文件已存在，为了安全起见，先将其删除或你可以根据需要修改逻辑
+            if os.path.exists(backup_file):
+                os.remove(backup_file)
+            os.rename(input_file, backup_file)
+            
+            # 2. 将修复后的列表写入原文件路径
+            with open(input_file, 'w') as f_out:
+                f_out.writelines(fixed_lines)
+                
+            print(f"共找到并替换了 {nan_count} 个 'NaN' 值为 {fill_value}")
+            print(f"原始含有 NaN 的文件已备份为: {backup_file}")
+            print(f"修复后的文件已覆盖至原路径: {input_file}")
+        else:
+            print("文件中未发现 'NaN'，无需进行备份或修改。")
+            
+    except FileNotFoundError:
+        print(f"错误: 找不到文件 '{input_file}'，请检查路径。")
+    except Exception as e:
+        print(f"发生未知错误: {e}")
+

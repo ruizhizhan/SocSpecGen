@@ -10,19 +10,26 @@ NT = '62'
 NP = '22'
 RES = '001'
 # choose the correct hdf5 file (different broadening, ...)
-MOLEULES_TO_INCLUDE = ['SiO']
-TEST_NAME = 'SiO_T62xP22_001'
+MOLEULES_TO_INCLUDE = ['CO2','O2']
+STAR_NAME = 'K7_5V_phoenix' 
+# K7_5V_phoenix M2_5V_sphinx M8_5V_sphinx LHS3844_sphinx LTT1445A_sphinx Trappist-1_sphinx GJ486_sphinx GJ1132_sphinx GJ3929_sphinx 
+TEST_NAME = f'{STAR_NAME}_CO2_O2'
 
 # ==========================================
 # 2. Gas Library (Absorption & UV only)
 # ==========================================
 # Keys are molecule names. Values contain IDs, HDF5 paths, and UV settings.
+# The "Ill-conditioned division in Newton-Raphson iteration" error is fundamentally triggered by 
+# unphysical non-positive values entering the optical depth calculations, 
+# stemming either from negative cross-sections in your CIA (Collision-Induced Absorption) data 
+# or from $0/0$ NaNs caused by Planck function underflow at short wavelengths and extreme low temperatures.
 GAS_LIBRARY = {
     'CO2': {
         'molecule': '12C-16O2',
         'gas_id': '2',
         'gas_abs_config': {
-            'hdf5_rel_path': f'ExoMol/hdf5/CO2/CO2_UCL-4000_1.0-20000.0_T{NT}xP{NP}_{RES}.h5',
+            'hdf5_rel_path': 'ExoMol/hdf5/CO2/CO2_Dozen_1.0-20000.0_T62xP22_001.h5',
+            #f'ExoMol/hdf5/CO2/CO2_UCL-4000_1.0-20000.0_T{NT}xP{NP}_{RES}.h5', # this is too old
             'datasource': f'CO2_T{NT}xP{NP}_{RES}',
             'lower_wn': 1.0,
             'upper_wn': 20000.0,
@@ -112,7 +119,24 @@ GAS_LIBRARY = {
     'H2': {},
     'N2O': {},
     'NH3': {},
-    'SO2': {},
+    'SO2': {
+        'molecule': '32S_16O2',
+        'gas_id': '9',
+        'gas_abs_config': {
+            'hdf5_rel_path': 'ExoMol/hdf5/SO2/SO2_ExoAmes_H2broad_1.0-8000.0_T37xP22_001.h5',
+            'datasource': 'SO2_T37xP22_001',
+            'lower_wn': 1.0,
+            'upper_wn': 8000.0,
+        },
+        'uv_config': { # ExoMol/16O2/PhoMol/O2.uvxsc
+            'xuv_rel_path': 'ExoMol/32S_16O2/XUV/',
+            'xuv_file': 'SO2.uvxsc',
+            'lower_wn': 1e7/230, # approx 20000 cm-1
+            'upper_wn': 1e7/110, # approx 200000 cm-1
+            't_grid': [423], # uv no need to be such high res
+            'p_grid': [1e-6,1e-5,1e-4,1e-3], # in bar, from 0.1 Pa to 100 Pa
+        }
+    },
     'H2S': {},
     'HCl': {
         'uv_config': { 
@@ -141,6 +165,7 @@ GAS_LIBRARY = {
         'gas_id': '18', # hfc125
         'gas_abs_config': {
             'hdf5_rel_path': 'ExoMol/hdf5/SiO2/SiO2_OYT3_CO2broad_1.0-6000.0_T47xP22_001.h5',
+            # 'ExoMol/hdf5/SiO2/SiO2_OYT3_1.0-6000.0_T47xP22_001.h5', # self broad
             'datasource': 'SiO2_T47xP22_001',
             'lower_wn': 1.0,
             'upper_wn': 6000.0,
@@ -216,13 +241,29 @@ CIA_LIBRARY = { # single pressure grid for each CIA
         'upper_wn': [1950.000,8355,8355,9596.0000,11228.000,13839.642,14898.000,16664.000,16664.000,29784.000,29748.000,29802.000,29757.000,29837.000,33670.000],
         't_grid': [150,200,250,300],
         'p_grid': [1.0]
+    },
+    'O2-N2':{
+        'cia_rel_path': 'hitran/O2-N2_2024',
+        'cia_file': 'O2-N2_2024.cia',
+        'lower_wn': [1300, 1850, 2000, 7583, 12600],
+        'upper_wn': [1850, 3000, 2698, 8355, 13840], 
+        't_grid': [150,200,250,300,350,400],
+        'p_grid': [1.0]
+    },
+    'O2-CO2':{
+        'cia_rel_path': 'hitran/O2-CO2_2024',
+        'cia_file': 'O2-CO2_2024.cia',
+        'lower_wn': [9105, 12600],
+        'upper_wn': [9545, 13840],
+        't_grid': [250,300],
+        'p_grid': [1.0]
     }
+    # parse_cia.py
 }
 
 # ==========================================
 # 4. Simulation Parameters
 # ==========================================
-STAR_NAME = 'Trappist-1_sphinx'
 NUM_KTERM = 20
 INCLUDE_CIA = True
 INCLUDE_SOLAR_SED = True

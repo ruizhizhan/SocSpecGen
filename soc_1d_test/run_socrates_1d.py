@@ -198,25 +198,22 @@ def read_nc(case_name,i,j):
 # p_full = pres[1::2]; t_full = temp[1::2]
 # ps = pres[-1]; t_surf = temp[-1]
 # print(p_full[-1],t_full[-1],ps,t_surf)
-
+gas_masses = {
+    'co2': 44.010e-3, 'co': 28.010e-3, 'o2': 31.999e-3, 'n2': 28.013e-3, 
+    'n2o': 44.013e-3, 'ch4': 16.043e-3, 'so2': 64.066e-3, 'nh3': 17.031e-3, 
+    'h2': 2.016e-3, 'h2s': 34.082e-3, #'cfc11': 137.368e-3, 'cfc12': 120.914e-3,
+    'h2o': 18.015e-3, 'sio': 44.085e-3, 'mgo': 40.304e-3, 'sio2': 60.084e-3
+}
 
 if __name__ == "__main__":
     # 1. Set atmos composition (Volume Mixing Ratios or Moles) here
     gas_moles = {
         'co2': 0.0, 'co': 0.0, 'o2': 0.0, 'n2': 0.0, 'n2o': 0.0, 'ch4': 0.0,
         'so2': 0.0, 'nh3': 0.0, 'h2': 0.0, 'h2s': 0.0, #'cfc11': 0.0, 'cfc12': 0.0,
-        'h2o': 0.0, 'sio': 0.0, 'mgo': 1.0, 'sio2': 0.0
+        'h2o': 0.0, 'sio': 1.0, 'mgo': 0.0, 'sio2': 0.0
     }
     
-    # 2. Molecular Weights (kg/mol)
-    gas_masses = {
-        'co2': 44.010e-3, 'co': 28.010e-3, 'o2': 31.999e-3, 'n2': 28.013e-3, 
-        'n2o': 44.013e-3, 'ch4': 16.043e-3, 'so2': 64.066e-3, 'nh3': 17.031e-3, 
-        'h2': 2.016e-3, 'h2s': 34.082e-3, #'cfc11': 137.368e-3, 'cfc12': 120.914e-3,
-        'h2o': 18.015e-3, 'sio': 44.085e-3, 'mgo': 40.304e-3, 'sio2': 60.084e-3
-    }
-
-    # 3. Calculate Mean Molecular Weight (mmw) and MMRs automatically
+    # 2. Calculate Mean Molecular Weight (mmw) and MMRs automatically
     mmw = sum(gas_moles[g] * gas_masses[g] for g in gas_moles)
     
     mmr_dict = {f"{g}_mmr": (gas_moles[g] * gas_masses[g] / mmw) for g in gas_moles}
@@ -225,8 +222,8 @@ if __name__ == "__main__":
     soc_base = 'test'
     spectral_root = f'/work/home/ac9b0k6rio/SocSpecGen/spectral_files'
     star_name = 'Trappist-1_sphinx'
-    spectral_file_name_lw = f"sp_lw_b96_Trappist-1_sphinx_MgO_T62xP22_001"
-    spectral_file_name_sw = f"sp_sw_b94_Trappist-1_sphinx_MgO_T62xP22_001"
+    spectral_file_name_lw = f"sp_lw_b96_Trappist-1_sphinx_SiO_T62xP22_001"
+    spectral_file_name_sw = f"sp_sw_b94_Trappist-1_sphinx_SiO_T62xP22_001"
     
     band_n_sw = get_band_number(spectral_file_name_sw)
     spectral_file_sw = os.path.join(spectral_root,f"sp_b{band_n_sw}",spectral_file_name_sw)

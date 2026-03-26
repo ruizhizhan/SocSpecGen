@@ -72,10 +72,17 @@ stellar_const = {
     'HD260655': {'Teff': 3803, 'MH': -0.43, 'stellar_mass_to_solar': 0.439, 'stellar_radius_to_solar': 0.439},
     'TOI244': {'Teff': 3433, 'MH': -0.39, 'stellar_mass_to_solar': 0.427, 'stellar_radius_to_solar': 0.428},
     'Trappist-1': {'Teff': 2566, 'MH': 0.0520, 'stellar_mass_to_solar': 0.0898, 'stellar_radius_to_solar': 0.1192},
+    'LHS3844': {'Teff': 3036, 'MH': 0, 'stellar_mass_to_solar': 0.151, 'stellar_radius_to_solar': 0.189}, # assume solar metallicity
+    'GJ486': {'Teff': 3317, 'MH': -0.15, 'stellar_mass_to_solar': 0.3120, 'stellar_radius_to_solar': 0.3243}, # assume solar metallicity
+    'M8_5V': {'Teff': 2500, 'MH': 0, 'stellar_mass_to_solar': 0.08, 'stellar_radius_to_solar': 0.1},
+    'GJ1132': {'Teff': 3229, 'MH': -0.17, 'stellar_mass_to_solar': 0.1945, 'stellar_radius_to_solar': 0.2211}, 
+    'M2_5V': {'Teff': 3500, 'MH': 0, 'stellar_mass_to_solar': 0.4, 'stellar_radius_to_solar': 0.4},
+    'K7_5V': {'Teff': 4000, 'MH': 0, 'stellar_mass_to_solar': 0.6, 'stellar_radius_to_solar': 0.6},
+    
 }
 
 g_sun_cgs = aconst.GM_sun.value/aconst.R_sun.value**2 * 1e2 # [cm/s^2]
-for star in ['Trappist-1']: # 'GJ3929', 'LTT1445A', 'LHS1140', 'TOI198', 'TOI406', 'TOI771', 'HD260655', 'TOI244'
+for star in ['GJ1132']: # 'GJ3929', 'LTT1445A', 'LHS1140', 'TOI198', 'TOI406', 'TOI771', 'HD260655', 'TOI244'
     params = stellar_const[star]
     Teff = params['Teff']
     MH = params['MH']
@@ -85,7 +92,7 @@ for star in ['Trappist-1']: # 'GJ3929', 'LTT1445A', 'LHS1140', 'TOI198', 'TOI406
 
     # phoenix model
     # wavelen_m, irradiance_wm3 = interp_sed(Teff, MH, logg_cgs, model_type='phoenix')
-    # output_filename = f'stellar_spectra/{star}_phoenix.socrates'
+    # output_filename = f'stellar_spectra/soc_in/{star}_phoenix'
     # write_to_socrates_input(output_filename, star, wavelen_m, irradiance_wm3, model_type='phoenix')
 
     # sphinx model

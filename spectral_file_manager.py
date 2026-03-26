@@ -163,11 +163,12 @@ def get_solar_wn_range(file_path: str) -> Tuple[float, float]:
 # 2. Worker Script Generator 
 # ==========================================
 
-def write_worker_script(filename, test_name, selected_gases_list, spec_type: Literal['lw','sw']):
+# Changed: Added job_dir parameter
+def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_type: Literal['lw','sw']):
     """
     Writes a Python script dynamically configured with injected logic and data.
     """
-    file_path = os.path.join(cfg.SLURM_DIR, filename)
+    file_path = os.path.join(job_dir, filename)
     
     # 1. Prepare Data
     current_gas_configs = [cfg.GAS_LIBRARY[g] for g in selected_gases_list]
@@ -243,7 +244,7 @@ def write_worker_script(filename, test_name, selected_gases_list, spec_type: Lit
         # Inject the (potentially filtered) WNEDGES
         f.write(f"wnedges = np.array({target_wnedges.tolist()})\n")
         f.write(f"band_num = len(wnedges)-1\n")
-        f.write(f"outputfilename = f'sp_{{spec_type}}_b{{band_num}}_{{star_name}}_{{test_name}}'\n\n")
+        f.write(f"outputfilename = f'sp_{{spec_type}}_b{{band_num}}_{{test_name}}'\n\n")
         
         f.write(f"# Full configuration for gases\n")
         f.write(f"GAS_CONFIGS = {current_gas_configs}\n\n")
@@ -621,8 +622,9 @@ fix_socrates_nan(f"{os.path.join(final_dir, outputfilename)}_k")
 """)
 
 # Additional: modify H2O
-def modify_h2o_to_cfc113(filename):
-    file_path = os.path.join(cfg.SLURM_DIR, filename)
+# Changed: Added job_dir parameter
+def modify_h2o_to_cfc113(job_dir, filename):
+    file_path = os.path.join(job_dir, filename)
     # 使用原始多行字符串 (r"")，这样正则表达式里的 \s, \b 等就不会被转义
     append_script = r"""
 
@@ -669,15 +671,16 @@ def get_file_size_in_gb(file_path):
         print(f"Error: {e}")
         return None
 
-def write_slurm_script(job_name, case_name_list, gas_lbl_file_list):
-    slurm_path = os.path.join(cfg.SLURM_DIR, f'{job_name}.sh')
+# Changed: Added job_dir parameter
+def write_slurm_script(job_dir, job_name, case_name_list, gas_lbl_file_list):
+    slurm_path = os.path.join(job_dir, f'{job_name}.sh')
     cache_size_gb = 0.0
     for gas_lbl_file in gas_lbl_file_list:
         full_path = os.path.join(cfg.ROOT_DIR, gas_lbl_file)
         size_gb = get_file_size_in_gb(full_path)
         cache_size_gb += size_gb if size_gb is not None else 0.0
     gb_per_core = 2 # Wuzhen cluster
-    ncores = int(np.ceil(cache_size_gb / gb_per_core))+3
+    ncores = int(np.ceil(cache_size_gb / gb_per_core))+1
     with open(slurm_path, 'w') as f:
         f.write('#!/bin/bash\n')
         f.write(f'#SBATCH --job-name={job_name}\n')
@@ -687,7 +690,8 @@ def write_slurm_script(job_name, case_name_list, gas_lbl_file_list):
         f.write(f'#SBATCH -c {ncores}\n')
         f.write(f'#SBATCH --partition=wzhcnormal\n\n')
         
-        f.write(f'cd {cfg.SLURM_DIR}\n')
+        # Changed: switch into the specific job_identifier directory
+        f.write(f'cd {job_dir}\n')
         f.write('source /work/home/ac9b0k6rio/miniconda3/etc/profile.d/conda.sh\n')
         f.write('source /work/home/ac9b0k6rio/miniconda3/bin/activate exo-k\n\n')
         
@@ -716,17 +720,22 @@ if __name__ == "__main__":
     test_name = cfg.TEST_NAME
     job_identifier = f"sp_b{num_bands}_{cfg.STAR_NAME}_{test_name}"
     
+    # New: Create the specific sub-directory for this job
+    job_dir = os.path.join(cfg.SLURM_DIR, job_identifier)
+    os.makedirs(job_dir, exist_ok=True)
+    
     print(f"Generating scripts for: {test_name}")
     print(f"Selected Gases: {SELECTED_MOLECULES}")
+    print(f"Output Directory: {job_dir}")
     
     # Generate Python Worker Scripts
-    write_worker_script(f"{job_identifier}_lw.py", test_name, SELECTED_MOLECULES, 'lw')
-    write_worker_script(f"{job_identifier}_sw.py", test_name, SELECTED_MOLECULES, 'sw')
+    write_worker_script(job_dir, f"{job_identifier}_lw.py", test_name, SELECTED_MOLECULES, 'lw')
+    write_worker_script(job_dir, f"{job_identifier}_sw.py", test_name, SELECTED_MOLECULES, 'sw')
     
     # if 'H2O' in SELECTED_MOLECULES, modify H2O to CFC113
     if 'H2O' in SELECTED_MOLECULES:
-        modify_h2o_to_cfc113(f"{job_identifier}_lw.py")
-        modify_h2o_to_cfc113(f"{job_identifier}_sw.py")
+        modify_h2o_to_cfc113(job_dir, f"{job_identifier}_lw.py")
+        modify_h2o_to_cfc113(job_dir, f"{job_identifier}_sw.py")
         
     # Generate Slurm Submission Script
     case_name_list = [job_identifier]
@@ -734,8 +743,11 @@ if __name__ == "__main__":
     for gas in SELECTED_MOLECULES:
         gas_conf = cfg.GAS_LIBRARY[gas]
         gas_lbl_file_list.append(gas_conf['gas_abs_config']['hdf5_rel_path'])
-    write_slurm_script(job_identifier, case_name_list,gas_lbl_file_list)
+        
+    write_slurm_script(job_dir, job_identifier, case_name_list, gas_lbl_file_list)
     
     slurm_file = f'{job_identifier}.sh'
-    os.chmod(os.path.join(cfg.SLURM_DIR, slurm_file), 0o755)
-    print(f"To submit job, run:\n cd {cfg.SLURM_DIR} && sbatch {slurm_file}")
+    os.chmod(os.path.join(job_dir, slurm_file), 0o755)
+    
+    # Changed: Terminal output to show the new working directory
+    print(f"To submit job, run:\n cd {job_dir} && sbatch {slurm_file}")

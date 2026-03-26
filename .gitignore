@@ -34,5 +34,7 @@ stellar_spectra/*
 
 # --- 其他具体文件 ---
 GJ3929_stellar_spectra_comparison.png
+move_to_isca.py
+parse_cia.py
 *.err
 *.out
