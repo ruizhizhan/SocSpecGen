@@ -513,8 +513,6 @@ def check_absorption_mismatches(file_path):
                 gas_id = int(tokens[1])
                 num_k = int(tokens[2])
                 scale_type = int(tokens[3])
-                if band == 66:
-                    print(f"Debug: Found band 66 with gas_id {gas_id}, num_k {num_k}, scale_type {scale_type}")
                 
                 if num_k == 0:
                     pass # 明确无吸收

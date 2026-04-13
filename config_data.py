@@ -11,7 +11,7 @@ NP = '22'
 RES = '001'
 # choose the correct hdf5 file (different broadening, ...)
 MOLEULES_TO_INCLUDE = ['CO2','O2']
-STAR_NAME = 'GJ486_sphinx' 
+STAR_NAME = 'K7_5V_phoenix' 
 # K7_5V_phoenix M2_5V_sphinx M8_5V_sphinx LHS3844_sphinx LTT1445A_sphinx Trappist-1_sphinx GJ486_sphinx GJ1132_sphinx GJ3929_sphinx 
 TEST_NAME = f'{STAR_NAME}_CO2_O2'
 

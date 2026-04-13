@@ -71,7 +71,7 @@ def calculate_band_occupancy(
                     current_band_gas_ids.add(gas_id)
                     break 
         
-        # 2. Check Active CIAs (Modified for Segmented Lists)
+        """# 2. Check Active CIAs (Modified for Segmented Lists)
         for id1, id2, pair_name in active_cia_tuples:
             cia_conf = cfg.CIA_LIBRARY[pair_name]
             
@@ -91,7 +91,7 @@ def calculate_band_occupancy(
             
             if is_overlap:
                 current_band_gas_ids.add(id1)
-                current_band_gas_ids.add(id2)
+                current_band_gas_ids.add(id2)"""
         
         # New: Record missing gases for this band
         # Check which of the selected gases ended up NOT being in the set
@@ -603,6 +603,7 @@ with open(exec_file_sp, "w+") as f:
         
         for path in generated_cia_files[1:]:
              f.write('19\n')
+             f.write('y\n')
              f.write(f'{path}\n')
              
     f.write('-1\n')
