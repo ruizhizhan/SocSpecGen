@@ -33,12 +33,13 @@ def get_active_cias(selected_gases: List[str]) -> List[Tuple[str, str, str]]:
 def calculate_band_occupancy(
     wnedges: np.ndarray, 
     selected_gases: List[str], 
-    active_cia_tuples: List[Tuple[str, str, str]]
+    active_cia_tuples: List[Tuple[str, str, str]],
+    include_uv: bool = True  
 ) -> List[List[str]]:
     """
     Determines which gases are present in each spectral band.
-    Logic: A gas is present if its main absorption, UV, OR any of its active CIAs 
-    overlap with the band.
+    Logic: A gas is present if its main absorption, UV (if include_uv is True), 
+    OR any of its active CIAs overlap with the band.
     """
     band_map = []
     num_bands = len(wnedges) - 1
@@ -60,7 +61,9 @@ def calculate_band_occupancy(
             
             if gas_conf.get('gas_abs_config'):
                 ranges_to_check.append((gas_conf['gas_abs_config']['lower_wn'], gas_conf['gas_abs_config']['upper_wn']))
-            if gas_conf.get('uv_config'):
+            
+            # check if uv included
+            if include_uv and gas_conf.get('uv_config'):
                 ranges_to_check.append((gas_conf['uv_config']['lower_wn'], gas_conf['uv_config']['upper_wn']))
             
             for r_min, r_max in ranges_to_check:
@@ -208,7 +211,11 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
             print(f"Error reading solar file: {e}. Using full WNEDGES.")
 
     # Calculate Band Map using the TARGET edges
-    band_gas_map = calculate_band_occupancy(target_wnedges, selected_gases_list, active_cia_tuples)
+    if spec_type == 'sw' or cfg.ULTRA_HOT_ATMOSPHERE:
+        include_uv = True
+    else:
+        include_uv = False
+    band_gas_map = calculate_band_occupancy(target_wnedges, selected_gases_list, active_cia_tuples, include_uv=include_uv)
     
     with open(file_path, 'w') as f:
         # --- Imports ---
@@ -619,6 +626,13 @@ if os.path.exists(f'sp_b{band_num}_{test_name}_k'):
 # 9. check and modify NaNs in the final spectral file (if any)
 fix_socrates_nan(f"{os.path.join(final_dir, outputfilename)}")
 fix_socrates_nan(f"{os.path.join(final_dir, outputfilename)}_k")
+
+# 10. double check if the spectral file contains missing gases
+from util.tools import check_absorption_mismatches
+outputfile = os.path.join(final_dir, outputfilename)
+results = check_absorption_mismatches(outputfile)
+if results:
+    print(f"File {outputfile} find missing gases:\n {len(results)}")
 """)
 
 # Additional: modify H2O
@@ -628,9 +642,8 @@ def modify_h2o_to_cfc113(job_dir, filename):
     # 使用原始多行字符串 (r"")，这样正则表达式里的 \s, \b 等就不会被转义
     append_script = r"""
 
-# 9. Post-processing: Modify H2O to CFC113 in the final spectral file
+# Post-processing: Modify H2O to CFC113 in the final spectral file
 import re
-outputfile = os.path.join(final_dir, outputfilename)
 
 if os.path.exists(outputfile):
     with open(outputfile, 'r', encoding='utf-8') as f:
@@ -718,7 +731,7 @@ if __name__ == "__main__":
             
     num_bands = len(cfg.WNEDGES) - 1
     test_name = cfg.TEST_NAME
-    job_identifier = f"sp_b{num_bands}_{cfg.STAR_NAME}_{test_name}"
+    job_identifier = f"sp_b{num_bands}_{test_name}"
     
     # New: Create the specific sub-directory for this job
     job_dir = os.path.join(cfg.SLURM_DIR, job_identifier)

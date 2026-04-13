@@ -11,7 +11,7 @@ NP = '22'
 RES = '001'
 # choose the correct hdf5 file (different broadening, ...)
 MOLEULES_TO_INCLUDE = ['CO2','O2']
-STAR_NAME = 'K7_5V_phoenix' 
+STAR_NAME = 'GJ486_sphinx' 
 # K7_5V_phoenix M2_5V_sphinx M8_5V_sphinx LHS3844_sphinx LTT1445A_sphinx Trappist-1_sphinx GJ486_sphinx GJ1132_sphinx GJ3929_sphinx 
 TEST_NAME = f'{STAR_NAME}_CO2_O2'
 
@@ -38,7 +38,7 @@ GAS_LIBRARY = {
             'xuv_rel_path': 'ExoMol/12C_16O2/XUV/',
             'xuv_file': 'CO2_DTU.uvxsc',
             'lower_wn': 1e7/280, # approx 35000 cm-1
-            'upper_wn': 1e7/108, # approx 100000 cm-1
+            'upper_wn': 1e7/119, # approx 100000 cm-1
             't_grid': [305.0,550.0,800.0,1160.0,1630.0],
             'p_grid': [1e-6,1e-5,1e-4,1e-3], # in bar, from 0.1 Pa to 100 Pa
         }

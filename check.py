@@ -1,6 +1,6 @@
 import os
 import re
-from util.tools import fix_socrates_nan
+from util.tools import fix_socrates_nan, check_absorption_mismatches
 
 def replace_negatives_in_cia_files(directory):
     for filename in os.listdir(directory):
@@ -123,7 +123,7 @@ def parse_spectral_files(directory_path, file_name):
     return block_numbers, file_has_nan, file_k_has_nan
 
 if __name__ == "__main__":
-    # 1. gothrough the CIA files
+    """# 1. gothrough the CIA files
     cia_root = '/work/home/ac9b0k6rio/SocSpecGen/hitran'
     for cia_rel_path in ['CO2-CO2_2024','CO2-H2O_2024','N2-H2O_2018','O2-CO2_2024','O2-N2_2024','N2-N2_2021','O2-O2_2024']:
         directory = os.path.join(cia_root, cia_rel_path)
@@ -138,6 +138,21 @@ if __name__ == "__main__":
                                "sp_b96/sp_lw_b96_Trappist-1_sphinx_SiO_T62xP22_001",
                                "sp_b96/sp_lw_b96_55CancriA_CO2_T62xP22_001_nk20"]:
         parse_spectral_files(spectral_file_dir, spectral_file_name)
-    
+    """
     # 3. fix NaN in socrates files
     # fix_socrates_nan(os.path.join(spectral_file_dir,"sp_b96/sp_lw_b96_Trappist-1_sphinx_SiO_T62xP22_001_k"))
+    for star_name in ['K7_5V_phoenix','M2_5V_sphinx', 'M8_5V_sphinx', 'LHS3844_sphinx', 'LTT1445A_sphinx', 'Trappist-1_sphinx', 'GJ486_sphinx', 'GJ1132_sphinx', 'GJ3929_sphinx']:
+        if star_name != "LTT1445A_sphinx":
+            continue
+        spectral_file = f"/work/home/ac9b0k6rio/SocSpecGen/spectral_files/sp_b96/sp_lw_b96_{star_name}_CO2_O2"
+        results = check_absorption_mismatches(spectral_file)
+        if results:
+            print(f"File {spectral_file} find missing gases:\n {len(results)} in band number: {results[0][:]}")
+        
+        """if star_name in ['K7_5V_phoenix']:
+            spectral_file = f"/work/home/ac9b0k6rio/SocSpecGen/spectral_files/sp_b90/sp_sw_b90_{star_name}_CO2_O2"
+        else:
+            spectral_file = f"/work/home/ac9b0k6rio/SocSpecGen/spectral_files/sp_b94/sp_sw_b94_{star_name}_CO2_O2"
+        results = check_absorption_mismatches(spectral_file)
+        if results:
+            print(f"File {spectral_file} find missing gases:\n {len(results)} in band number: {results[0][:]}")"""

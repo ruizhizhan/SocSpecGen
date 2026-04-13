@@ -435,3 +435,132 @@ def fix_socrates_nan(input_file, fill_value="1.00000E-45"):
     except Exception as e:
         print(f"发生未知错误: {e}")
 
+
+from collections import defaultdict
+
+def check_absorption_mismatches(file_path):
+    """
+    解析 SOCRATES spectral file。
+    对比 Block 4 (预期吸收气体) 和 Block 5 (实际给出吸收系数的气体)。
+    找出在 Block 4 中声明有吸收，但在 Block 5 中表现为 0 吸收的气体。
+    """
+    # 记录 Block 4 声明的吸收气体: {band: set(gas1, gas2...)}
+    expected_absorbers = defaultdict(set)
+    
+    # 记录 Block 5 实际有大于 0 吸收的气体: {band: set(gas1, gas2...)}
+    actual_absorbers = defaultdict(set)
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        print(f"错误: 找不到文件 '{file_path}'")
+        return None
+
+    i = 0
+    in_block_4 = False
+    in_block_5 = False
+
+    while i < len(lines):
+        line = lines[i].strip()
+        
+        # 1. 区域状态切换
+        if line.startswith("*BLOCK:"):
+            if re.search(r'TYPE\s*=\s*4', line):
+                in_block_4 = True
+                in_block_5 = False
+                i += 1
+                continue
+            elif re.search(r'TYPE\s*=\s*5', line):
+                in_block_5 = True
+                in_block_4 = False
+                i += 1
+                continue
+            else:
+                in_block_4 = False
+                in_block_5 = False
+
+        if line.startswith("*END"):
+            in_block_4 = False
+            in_block_5 = False
+
+        # ==========================================
+        # 2. 解析 Block 4 (提取预期吸收气体)
+        # ==========================================
+        if in_block_4:
+            tokens = line.split()
+            if len(tokens) == 3 and all(t.isdigit() for t in tokens):
+                band = int(tokens[0])
+                n_abs = int(tokens[1])
+                
+                collected = 0
+                while collected < n_abs and i + 1 < len(lines):
+                    i += 1
+                    next_tokens = lines[i].strip().split()
+                    for t in next_tokens:
+                        if t.isdigit():
+                            expected_absorbers[band].add(int(t))
+                            collected += 1
+
+        # ==========================================
+        # 3. 解析 Block 5 (验证实际吸收系数)
+        # ==========================================
+        elif in_block_5:
+            tokens = line.split()
+            # 匹配 Block 5 的头部特征行 (5个整数)
+            if len(tokens) == 5 and all(t.lstrip('-').isdigit() for t in tokens):
+                band = int(tokens[0])
+                gas_id = int(tokens[1])
+                num_k = int(tokens[2])
+                scale_type = int(tokens[3])
+                if band == 66:
+                    print(f"Debug: Found band 66 with gas_id {gas_id}, num_k {num_k}, scale_type {scale_type}")
+                
+                if num_k == 0:
+                    pass # 明确无吸收
+                    
+                elif num_k > 1 or scale_type != 0:
+                    # 分配了多个 k-terms 或启用了温压缩放，必然是活跃吸收的 k-分布
+                    actual_absorbers[band].add(gas_id)
+                    
+                elif num_k == 1 and scale_type == 0:
+                    # 单一 k 值的情况：可能是强吸收，也可能是完全透明 (k=0)
+                    # 我们需要安全地向下读取两行（忽略期间的空行）来获取真实 k 值
+                    pt_found = False
+                    
+                    while i + 1 < len(lines):
+                        i += 1
+                        next_line = lines[i].strip()
+                        if not next_line:
+                            continue # 过滤并忽略排版可能造成的空行
+                            
+                        if not pt_found:
+                            pt_found = True # 成功跳过第1行参考温压 (P, T)
+                        else:
+                            # 成功来到第2行 (k, w)
+                            k_tokens = next_line.split()
+                            if k_tokens:
+                                try:
+                                    # .replace('D', 'E') 是为了兼容某些 Fortran 输出的双精度科学计数法
+                                    k_str = k_tokens[0].replace('D', 'E').replace('d', 'e')
+                                    if float(k_str) > 0.0:
+                                        actual_absorbers[band].add(gas_id)
+                                except ValueError:
+                                    pass
+                            break # 找到了 k 值行，立刻退出这个子循环
+        
+        i += 1
+
+    # ==========================================
+    # 4. 交叉对比逻辑
+    # ==========================================
+    mismatches = []
+    for band in sorted(expected_absorbers.keys()):
+        expected = expected_absorbers.get(band, set())
+        actual = actual_absorbers.get(band, set())
+        
+        missing_gases = expected - actual
+        for gas in sorted(missing_gases):
+            mismatches.append((band, gas))
+            
+    return mismatches
