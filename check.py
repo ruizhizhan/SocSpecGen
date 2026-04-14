@@ -142,15 +142,15 @@ if __name__ == "__main__":
     # 3. fix NaN in socrates files
     # fix_socrates_nan(os.path.join(spectral_file_dir,"sp_b96/sp_lw_b96_Trappist-1_sphinx_SiO_T62xP22_001_k"))
     for star_name in ['K7_5V_phoenix','M2_5V_sphinx', 'M8_5V_sphinx', 'LHS3844_sphinx', 'LTT1445A_sphinx', 'Trappist-1_sphinx', 'GJ486_sphinx', 'GJ1132_sphinx', 'GJ3929_sphinx']:
-        spectral_file = f"/work/home/ac9b0k6rio/SocSpecGen/spectral_files/sp_b96/sp_lw_b96_{star_name}_CO2_O2"
+        spectral_file = f"/work/home/ac9b0k6rio/SocSpecGen/spectral_files/sp_b96/sp_lw_b96_{star_name}_CO2_T62xP22_001"
         results = check_absorption_mismatches(spectral_file)
         if results:
             print(f"File {spectral_file} find missing gases:\n {len(results)} in band number: {results[0][:]}")
         
-        """if star_name in ['K7_5V_phoenix']:
-            spectral_file = f"/work/home/ac9b0k6rio/SocSpecGen/spectral_files/sp_b90/sp_sw_b90_{star_name}_CO2_O2"
+        if star_name in ['K7_5V_phoenix']:
+            spectral_file = f"/work/home/ac9b0k6rio/SocSpecGen/spectral_files/sp_b90/sp_sw_b90_{star_name}_CO2_T62xP22_001"
         else:
-            spectral_file = f"/work/home/ac9b0k6rio/SocSpecGen/spectral_files/sp_b94/sp_sw_b94_{star_name}_CO2_O2"
+            spectral_file = f"/work/home/ac9b0k6rio/SocSpecGen/spectral_files/sp_b94/sp_sw_b94_{star_name}_CO2_T62xP22_001"
         results = check_absorption_mismatches(spectral_file)
         if results:
-            print(f"File {spectral_file} find missing gases:\n {len(results)} in band number: {results[0][:]}")"""
+            print(f"File {spectral_file} find missing gases:\n {len(results)} in band number: {results[0][:]}")

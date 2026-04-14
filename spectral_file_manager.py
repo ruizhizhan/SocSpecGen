@@ -6,6 +6,8 @@ from typing import Literal, List, Dict, Tuple, Set
 # Import configuration
 import config_data as cfg
 
+DEFAULT_CIA_T_GRID = [250.0, 300.0]
+
 # ==========================================
 # Helper Functions (Logic Pre-calculation)
 # ==========================================
@@ -29,6 +31,35 @@ def get_active_cias(selected_gases: List[str]) -> List[Tuple[str, str, str]]:
             active_cias.append((id1, id2, pair_name))
             
     return active_cias
+
+def resolve_shared_cia_t_grid(
+    active_cia_tuples: List[Tuple[str, str, str]],
+    cia_configs: Dict[str, Dict]
+) -> List[float]:
+    """
+    SOCRATES 2207/2507 Block 19 supports only one shared continuum
+    temperature lookup grid. Return the common subset implied by the
+    active CIA datasets, preserving the order from the first active CIA.
+    """
+    if not active_cia_tuples:
+        return []
+
+    ordered_grids: List[List[float]] = []
+    for _, _, pair_name in active_cia_tuples:
+        cia_conf = cia_configs.get(pair_name)
+        if cia_conf is None or 't_grid' not in cia_conf:
+            raise ValueError(f"No t_grid found for CIA pair: {pair_name}")
+        ordered_grids.append([float(value) for value in np.asarray(cia_conf['t_grid'], dtype=float).tolist()])
+
+    shared_grid = ordered_grids[0]
+    for grid in ordered_grids[1:]:
+        grid_set = set(grid)
+        shared_grid = [value for value in shared_grid if value in grid_set]
+
+    if len(shared_grid) < 2:
+        return DEFAULT_CIA_T_GRID.copy()
+
+    return shared_grid
 
 def calculate_band_occupancy(
     wnedges: np.ndarray, 
@@ -180,6 +211,7 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
     
     active_cia_tuples = get_active_cias(selected_gases_list)
     relevant_cia_configs = {pair: cfg.CIA_LIBRARY[pair] for _, _, pair in active_cia_tuples}
+    shared_cia_t_grid = resolve_shared_cia_t_grid(active_cia_tuples, relevant_cia_configs)
 
     # --- Wavenumber Logic (Modified) ---
     target_wnedges = cfg.WNEDGES # Default to full edges
@@ -247,6 +279,7 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
         f.write(f"BAND_GAS_MAP = {band_gas_map}\n") 
         f.write(f"ACTIVE_CIA_TUPLES = {active_cia_tuples}\n")
         f.write(f"RELEVANT_CIA_CONFIGS = {relevant_cia_configs}\n")
+        f.write(f"CIA_SHARED_T_GRID = {shared_cia_t_grid}\n")
         
         # Inject the (potentially filtered) WNEDGES
         f.write(f"wnedges = np.array({target_wnedges.tolist()})\n")
@@ -403,10 +436,9 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
             continue
 
         # 5a. Retrieve T_grid and P_grid
-        if 't_grid' in cia_conf:
-            T_cia_grid = np.array(cia_conf['t_grid'])
-        else:
-            raise ValueError(f"No t_grid found for {pair_name}")
+        if not CIA_SHARED_T_GRID:
+            raise ValueError("CIA_SHARED_T_GRID is empty for active CIA pairs.")
+        T_cia_grid = np.array(CIA_SHARED_T_GRID, dtype=float)
         if 'p_grid' in cia_conf:
             P_cia_grid = np.array(cia_conf['p_grid'])
         else:
