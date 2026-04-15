@@ -208,9 +208,9 @@ gas_masses = {
 if __name__ == "__main__":
     # 1. Set atmos composition (Volume Mixing Ratios or Moles) here
     gas_moles = {
-        'co2': 0.0, 'co': 0.0, 'o2': 0.0, 'n2': 0.0, 'n2o': 0.0, 'ch4': 0.0,
+        'co2': 1.0, 'co': 0.0, 'o2': 0.0, 'n2': 0.0, 'n2o': 0.0, 'ch4': 0.0,
         'so2': 0.0, 'nh3': 0.0, 'h2': 0.0, 'h2s': 0.0, #'cfc11': 0.0, 'cfc12': 0.0,
-        'h2o': 0.0, 'sio': 1.0, 'mgo': 0.0, 'sio2': 0.0
+        'h2o': 0.0, 'sio': 0.0, 'mgo': 0.0, 'sio2': 0.0
     }
     
     # 2. Calculate Mean Molecular Weight (mmw) and MMRs automatically
@@ -222,8 +222,8 @@ if __name__ == "__main__":
     soc_base = 'test'
     spectral_root = f'/work/home/ac9b0k6rio/SocSpecGen/spectral_files'
     star_name = 'Trappist-1_sphinx'
-    spectral_file_name_lw = f"sp_lw_b96_Trappist-1_sphinx_SiO_T62xP22_001"
-    spectral_file_name_sw = f"sp_sw_b94_Trappist-1_sphinx_SiO_T62xP22_001"
+    spectral_file_name_lw = f"sp_lw_b96_Trappist-1_sphinx_CO2_T62xP22_001"
+    spectral_file_name_sw = f"sp_sw_b94_Trappist-1_sphinx_CO2_T62xP22_001"
     
     band_n_sw = get_band_number(spectral_file_name_sw)
     spectral_file_sw = os.path.join(spectral_root,f"sp_b{band_n_sw}",spectral_file_name_sw)
@@ -248,6 +248,7 @@ if __name__ == "__main__":
         has_block_18 = '*BLOCK: TYPE =   18' in f.read()
 
     run_str = f"Cl_run_cdf -B {soc_base} -s {spectral_file_lw} -R 1 {band_n_lw} -I -g 4 -C 5 -t 12 -v 13 -q -z 1{' -u' if has_block_18 else ''}"
+    print(run_str)
     os.system(run_str)
     plev, uflux = read_latlon('.',f'{soc_base}','uflx','uflx')
     olr = uflux[0]
