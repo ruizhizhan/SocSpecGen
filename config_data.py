@@ -11,7 +11,7 @@ NP = '22'
 RES = '001'
 # choose the correct hdf5 file (different broadening, ...)
 MOLEULES_TO_INCLUDE = ['CO2','O2']
-STAR_NAME = 'GJ3929_sphinx'
+STAR_NAME = 'K7_5V_phoenix'
 NUM_KTERM = 20
 # K7_5V_phoenix M2_5V_sphinx M8_5V_sphinx LHS3844_sphinx LTT1445A_sphinx Trappist-1_sphinx GJ486_sphinx GJ1132_sphinx GJ3929_sphinx 
 TEST_NAME = f'{STAR_NAME}_CO2_O2'
@@ -201,14 +201,20 @@ GAS_LIBRARY = {
 # 3. CIA Library (Independent)
 # ==========================================
 # Keys are the pair names (Must match structure MolA-MolB).
-# Used to determine if a CIA file should be included based on selected gases.
-CIA_LIBRARY = { # single pressure grid for each CIA
+# For a single spectral file, the worker uses one shared CIA T-grid for all
+# active pairs. This is a controlled approximation and may require extrapolation
+# for some pair/band combinations.
+CIA_T_GRID_POLICY = 'shared'
+CIA_SHARED_T_GRID = [250,300,500,1000]
+CIA_T_GRID_OVERRIDE_BY_PAIR = {}
+
+CIA_LIBRARY = {
     'CO2-CO2': {
         'cia_rel_path': 'hitran/CO2-CO2_2024/',# 'hitran/CO2-CO2_2018/',
         'cia_file': 'CO2-CO2_2024.cia',# 'CO2-CO2_2018.cia',
         'lower_wn': [1,1120,2510,4000],
         'upper_wn': [750,1850,3250,4500],
-        't_grid': np.arange(200, 801, 100), 
+        't_grid': np.arange(200, 801, 100),
         'p_grid': [1.0]
     },
     'N2-N2':{ # hitran/N2-N2_2021/N2-N2_2021.cia; 70K-400K
@@ -256,7 +262,7 @@ CIA_LIBRARY = { # single pressure grid for each CIA
         'cia_file': 'O2-CO2_2024.cia',
         'lower_wn': [9105, 12600],
         'upper_wn': [9545, 13840],
-        't_grid': [250,300],
+        't_grid': [293, 296],
         'p_grid': [1.0]
     }
     # parse_cia.py
