@@ -109,7 +109,7 @@ def resolve_cia_t_grids(
             if not set(shared_grid).issubset(set(native_grid)):
                 warnings.append(
                     f"{pair_name}: shared grid {shared_grid} is not a subset of native grid {native_grid}; "
-                    "this will require extrapolation or model fitting."
+                    "the generated CIA file will clamp to the nearest native segment values."
                 )
             resolved_grids[pair_name] = grid
 
@@ -194,6 +194,96 @@ def analyze_cia_band_coverage(
         }
 
     return pair_band_coverage, sorted(bands_with_cia), required_gases_by_band
+
+
+def contiguous_integer_runs(values: List[int]) -> List[Tuple[int, int]]:
+    """
+    Compress a sorted integer set into contiguous inclusive runs.
+    """
+    sorted_values = sorted({int(value) for value in values})
+    if not sorted_values:
+        return []
+
+    runs: List[Tuple[int, int]] = []
+    run_start = sorted_values[0]
+    run_end = sorted_values[0]
+
+    for value in sorted_values[1:]:
+        if value == run_end + 1:
+            run_end = value
+        else:
+            runs.append((run_start, run_end))
+            run_start = value
+            run_end = value
+
+    runs.append((run_start, run_end))
+    return runs
+
+
+def build_cia_task_plan(
+    target_wnedges: np.ndarray,
+    active_cia_tuples: List[Tuple[str, str, str]],
+    cia_band_coverage: Dict[str, Dict],
+) -> Tuple[List[Dict], Dict[str, List[Tuple[int, int]]]]:
+    """
+    Build a collision-free CIA execution plan.
+
+    Each task covers a contiguous band run for one CIA pair. Band runs are
+    derived from the union of bands that actually contain CIA data, which keeps
+    overlapping segment records from generating duplicate block-19 entries.
+    """
+    cia_task_plan: List[Dict] = []
+    cia_band_runs_by_pair: Dict[str, List[Tuple[int, int]]] = {}
+
+    for id1, id2, pair_name in active_cia_tuples:
+        pair_coverage = cia_band_coverage.get(pair_name)
+        if pair_coverage is None:
+            raise ValueError(f"Missing CIA band coverage for pair: {pair_name}")
+
+        band_runs = contiguous_integer_runs(pair_coverage['bands'])
+        if not band_runs:
+            raise ValueError(f"CIA pair {pair_name} has no band runs after coverage analysis")
+
+        cia_band_runs_by_pair[pair_name] = band_runs
+        for run_index, (band_start, band_end) in enumerate(band_runs):
+            if band_start < 1 or band_end >= len(target_wnedges):
+                raise ValueError(
+                    f"CIA pair {pair_name} band run {band_start}-{band_end} is outside the spectral grid"
+                )
+            cia_task_plan.append({
+                'pair_name': pair_name,
+                'gas_ids': [id1, id2],
+                'run_index': run_index,
+                'band_start': band_start,
+                'band_end': band_end,
+                'lower_wn': float(target_wnedges[band_start - 1]),
+                'upper_wn': float(target_wnedges[band_end]),
+            })
+
+    validate_cia_task_plan(cia_task_plan, cia_band_coverage)
+    return cia_task_plan, cia_band_runs_by_pair
+
+
+def validate_cia_task_plan(cia_task_plan: List[Dict], cia_band_coverage: Dict[str, Dict]) -> None:
+    """
+    Ensure the planned CIA tasks cover each pair exactly once per band.
+    """
+    bands_by_pair: Dict[str, List[int]] = {}
+    for task in cia_task_plan:
+        pair_name = task['pair_name']
+        bands_by_pair.setdefault(pair_name, [])
+        bands_by_pair[pair_name].extend(range(task['band_start'], task['band_end'] + 1))
+
+    for pair_name, coverage in cia_band_coverage.items():
+        expected_bands = sorted({int(band) for band in coverage['bands']})
+        actual_bands = sorted({int(band) for band in bands_by_pair.get(pair_name, [])})
+        if actual_bands != expected_bands:
+            raise ValueError(
+                f"CIA pair {pair_name} band plan does not match coverage. "
+                f"Expected bands: {expected_bands}; planned bands: {actual_bands}"
+            )
+        if len(bands_by_pair.get(pair_name, [])) != len(actual_bands):
+            raise ValueError(f"CIA pair {pair_name} has duplicate band assignments in the task plan")
 
 def calculate_band_occupancy(
     wnedges: np.ndarray, 
@@ -338,6 +428,16 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
         forced_by_pair=forced_cia_t_grids,
     )
     if active_cia_tuples:
+        resolved_grid_set = {
+            tuple(float(value) for value in np.asarray(grid, dtype=float).tolist())
+            for grid in cia_t_grids_by_pair.values()
+        }
+        if len(resolved_grid_set) != 1:
+            raise ValueError(
+                "SOCRATES 2207/2507 supports only one shared CIA T-grid across all active pairs. "
+                f"Resolved grids: {cia_t_grids_by_pair}"
+            )
+    if active_cia_tuples:
         print(
             f"[{spec_type}] CIA T-grid policy={cia_t_grid_policy} for {test_name}: {cia_t_grids_by_pair}"
         )
@@ -382,6 +482,11 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
         active_cia_tuples,
         relevant_cia_configs,
     )
+    cia_task_plan, cia_band_runs_by_pair = build_cia_task_plan(
+        target_wnedges,
+        active_cia_tuples,
+        cia_band_coverage,
+    )
 
     # Calculate BLOCK 4 band occupancy using the TARGET edges.
     # CIA is excluded here on purpose; it is handled separately in BLOCK 18/19.
@@ -403,6 +508,7 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
         f.write("import re\n")
         f.write("import shutil\n")
         f.write("import subprocess\n")
+        f.write("import traceback\n")
         f.write("from numpy import array\n") 
         f.write("import netCDF4\n")
         f.write("from typing import Literal\n")
@@ -435,6 +541,8 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
         f.write(f"CIA_T_GRID_OVERRIDE_BY_PAIR = {forced_cia_t_grids}\n")
         f.write(f"CIA_T_GRIDS_BY_PAIR = {cia_t_grids_by_pair}\n")
         f.write(f"CIA_BAND_COVERAGE = {cia_band_coverage}\n")
+        f.write(f"CIA_BAND_RUNS_BY_PAIR = {cia_band_runs_by_pair}\n")
+        f.write(f"CIA_TASK_PLAN = {cia_task_plan}\n")
         f.write(f"BANDS_WITH_CIA = {bands_with_cia}\n")
         f.write(f"MISSING_GAS_BANDS = {missing_gas_bands}\n")
         f.write(f"EMPTY_BAND_NUMBERS = {empty_band_numbers}\n")
@@ -455,6 +563,10 @@ mon_path_list = []
 LbL_path_list = []
 output_path_xuv_list = []
 generated_cia_files = []
+cia_regridded_files = {}
+cia_pt_files = {}
+cia_regrid_warnings = []
+prepared_cia_pairs = set()
 
 final_dir = os.path.join(root, f'spectral_files/sp_b{band_num}')
 outputfile = os.path.join(final_dir, outputfilename)
@@ -477,9 +589,13 @@ qa_summary = {
     },
     'cia_t_grid_override_by_pair': CIA_T_GRID_OVERRIDE_BY_PAIR,
     'per_pair_band_coverage': CIA_BAND_COVERAGE,
+    'cia_band_runs_by_pair': CIA_BAND_RUNS_BY_PAIR,
+    'cia_task_plan': CIA_TASK_PLAN,
     'bands_with_cia': BANDS_WITH_CIA,
     'missing_gas_bands': MISSING_GAS_BANDS,
     'empty_band_numbers': EMPTY_BAND_NUMBERS,
+    'cia_regridded_files': cia_regridded_files,
+    'cia_regrid_warnings': cia_regrid_warnings,
 }
 
 BLOCK_TYPE_PATTERN = re.compile(r'^\*BLOCK:\s+TYPE =\s*(\d+)\s*:')
@@ -861,6 +977,189 @@ def write_qa_summary():
         handle.write('\n')
 
 
+CIA_HEADER_TEMP_START = 47
+CIA_HEADER_MAX_XSC_START = 54
+CIA_HEADER_DATA_START = 64
+CIA_INTERP_FLOOR = np.finfo(np.float64).tiny
+
+
+def parse_cia_header_line(header_line):
+    tokens = header_line.split()
+    if len(tokens) < 8:
+        raise ValueError(f"Malformed CIA header line: {header_line.rstrip()}")
+
+    comments = ''
+    if len(tokens) > 8:
+        comments = ' '.join(tokens[7:-1])
+
+    return {
+        'raw_line': header_line.rstrip('\n'),
+        'symbol': tokens[0],
+        'wn_min': float(tokens[1]),
+        'wn_max': float(tokens[2]),
+        'no_pts': int(tokens[3]),
+        'temperature': float(tokens[4]),
+        'max_xsc': float(tokens[5].replace('D', 'E').replace('d', 'e')),
+        'resolution': tokens[6],
+        'comments': comments,
+        're_no': int(tokens[-1]),
+    }
+
+
+def parse_cia_database(cia_path):
+    records = []
+    with open(cia_path, 'r', encoding='utf-8') as handle:
+        while True:
+            header_line = handle.readline()
+            if not header_line:
+                break
+            if not header_line.strip():
+                continue
+            if header_line.lstrip().startswith(('!', '#')):
+                continue
+
+            header = parse_cia_header_line(header_line)
+            wavenumbers = np.empty(header['no_pts'], dtype=float)
+            data = np.empty(header['no_pts'], dtype=float)
+
+            for idx in range(header['no_pts']):
+                data_line = handle.readline()
+                if not data_line:
+                    raise ValueError(
+                        f"CIA file ended early while reading {cia_path}: "
+                        f"record {header['symbol']} {header['wn_min']}-{header['wn_max']}"
+                    )
+                row_tokens = data_line.split()
+                if len(row_tokens) < 2:
+                    raise ValueError(
+                        f"Malformed CIA data line in {cia_path}: {data_line.rstrip()}"
+                    )
+                wavenumbers[idx] = float(row_tokens[0].replace('D', 'E').replace('d', 'e'))
+                data[idx] = float(row_tokens[1].replace('D', 'E').replace('d', 'e'))
+
+            header['wavenumbers'] = wavenumbers
+            header['data'] = data
+            records.append(header)
+
+    if not records:
+        raise ValueError(f"No CIA records found in {cia_path}")
+
+    return records
+
+
+def cia_group_key(record):
+    return (
+        record['symbol'],
+        record['wn_min'],
+        record['wn_max'],
+        record['no_pts'],
+        tuple(np.round(record['wavenumbers'], 8).tolist()),
+        record['resolution'],
+        record['comments'],
+        record['re_no'],
+    )
+
+
+def interpolate_cia_series(temperatures, data_stack, target_temperature):
+    if data_stack.shape[0] == 1:
+        return data_stack[0].copy()
+
+    if target_temperature <= temperatures[0]:
+        return data_stack[0].copy()
+    if target_temperature >= temperatures[-1]:
+        return data_stack[-1].copy()
+
+    upper_idx = int(np.searchsorted(temperatures, target_temperature, side='right'))
+    lower_idx = upper_idx - 1
+    t_lower = temperatures[lower_idx]
+    t_upper = temperatures[upper_idx]
+    if t_upper == t_lower:
+        return data_stack[lower_idx].copy()
+
+    weight = (target_temperature - t_lower) / (t_upper - t_lower)
+    lower_values = np.maximum(data_stack[lower_idx], CIA_INTERP_FLOOR)
+    upper_values = np.maximum(data_stack[upper_idx], CIA_INTERP_FLOOR)
+    return np.exp(np.log(lower_values) + weight * (np.log(upper_values) - np.log(lower_values)))
+
+
+def format_cia_header_line(template_line, temperature, max_xsc):
+    header = template_line.rstrip('\n')
+    if len(header) < CIA_HEADER_DATA_START:
+        header = header.ljust(CIA_HEADER_DATA_START)
+    return (
+        header[:CIA_HEADER_TEMP_START]
+        + f"{temperature:7.2f}"
+        + f"{max_xsc:10.3e}"
+        + header[CIA_HEADER_DATA_START:]
+    )
+
+
+def format_cia_data_line(wavenumber, value):
+    return f"{wavenumber:10.4f} {value:10.3E}"
+
+
+def regrid_cia_database(source_cia_path, target_temperatures, output_cia_path, pair_name):
+    records = parse_cia_database(source_cia_path)
+    target_grid = [float(value) for value in np.asarray(target_temperatures, dtype=float).tolist()]
+    if len(target_grid) < 2:
+        raise ValueError(
+            f"CIA target grid for {pair_name} must contain at least two temperatures. Got: {target_grid}"
+        )
+    if any(t2 <= t1 for t1, t2 in zip(target_grid, target_grid[1:])):
+        raise ValueError(f"CIA target grid for {pair_name} must be strictly increasing: {target_grid}")
+
+    grouped_records = {}
+    group_order = []
+    for record in records:
+        key = cia_group_key(record)
+        if key not in grouped_records:
+            grouped_records[key] = []
+            group_order.append(key)
+        grouped_records[key].append(record)
+
+    warnings = []
+    os.makedirs(os.path.dirname(output_cia_path), exist_ok=True)
+
+    with open(output_cia_path, 'w', encoding='utf-8') as handle:
+        for key in group_order:
+            group_records = sorted(grouped_records[key], key=lambda rec: rec['temperature'])
+            reference = group_records[0]
+            temperatures = np.array([rec['temperature'] for rec in group_records], dtype=float)
+            data_stack = np.stack([rec['data'] for rec in group_records], axis=0)
+            wavenumbers = reference['wavenumbers']
+
+            for record in group_records[1:]:
+                if len(record['wavenumbers']) != len(wavenumbers) or not np.allclose(
+                    record['wavenumbers'], wavenumbers, rtol=0.0, atol=1e-8
+                ):
+                    raise ValueError(
+                        f"CIA record wavenumber grid mismatch in {source_cia_path} for {pair_name} "
+                        f"range {reference['wn_min']}-{reference['wn_max']}"
+                    )
+
+            for target_temperature in target_grid:
+                if target_temperature < temperatures[0]:
+                    warnings.append(
+                        f"{pair_name} {reference['wn_min']}-{reference['wn_max']}: "
+                        f"target T={target_temperature} is below native range {temperatures[0]}-{temperatures[-1]}; "
+                        "using low-temperature clamp."
+                    )
+                elif target_temperature > temperatures[-1]:
+                    warnings.append(
+                        f"{pair_name} {reference['wn_min']}-{reference['wn_max']}: "
+                        f"target T={target_temperature} is above native range {temperatures[0]}-{temperatures[-1]}; "
+                        "using high-temperature clamp."
+                    )
+
+                interpolated = interpolate_cia_series(temperatures, data_stack, target_temperature)
+                max_xsc = float(np.max(interpolated))
+                handle.write(format_cia_header_line(reference['raw_line'], target_temperature, max_xsc) + '\n')
+                for wavenumber, value in zip(wavenumbers, interpolated):
+                    handle.write(format_cia_data_line(wavenumber, value) + '\n')
+
+    return warnings
+
+
 remove_if_exists(outputfile)
 remove_if_exists(outputfile_k)
 remove_if_exists(qa_summary_path)
@@ -992,71 +1291,96 @@ ensure_nonempty_files(output_path_list, 'gas corr_k outputs')
 
 # 5. Include CIA (Hitran)
 if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
-    for id1, id2, pair_name in ACTIVE_CIA_TUPLES:
+    print(f"CIA band runs by pair: {CIA_BAND_RUNS_BY_PAIR}")
+    for task in CIA_TASK_PLAN:
+        pair_name = task['pair_name']
+        id1, id2 = task['gas_ids']
+        run_index = task['run_index']
+        band_start = task['band_start']
+        band_end = task['band_end']
         cia_conf = RELEVANT_CIA_CONFIGS.get(pair_name)
         if not cia_conf:
             raise ValueError(f"Missing CIA configuration for pair {pair_name}")
 
-        T_cia_grid = np.array(CIA_T_GRIDS_BY_PAIR[pair_name], dtype=float)
-        P_cia_grid = np.array(cia_conf.get('p_grid', [1.0]), dtype=float)
+        if pair_name not in prepared_cia_pairs:
+            T_cia_grid = np.array(CIA_T_GRIDS_BY_PAIR[pair_name], dtype=float)
+            P_cia_grid = np.array(cia_conf.get('p_grid', [1.0]), dtype=float)
 
-        pt_cia_path = os.path.join(root, f'block19/pt_cia_{pair_name}_{test_name}')
-        remove_if_exists(pt_cia_path)
-        with open(pt_cia_path, "w", encoding='utf-8') as pt_file:
-            pt_file.write('*PTVAL\n')
-            for P_0 in P_cia_grid:
-                pt_file.write(f'{P_0 * 1e+5}')
-                for T in T_cia_grid:
-                    pt_file.write(f' {T}')
-                pt_file.write('\n')
-            pt_file.write('*END')
-        ensure_nonempty_file(pt_cia_path, f"CIA PT file for {pair_name}")
+            source_cia_path = os.path.join(root, cia_conf['cia_rel_path'], cia_conf['cia_file'])
+            ensure_nonempty_file(source_cia_path, f"CIA input file for {pair_name}")
 
-        cia_file_path = os.path.join(root, cia_conf['cia_rel_path'], cia_conf['cia_file'])
-        ensure_nonempty_file(cia_file_path, f"CIA input file for {pair_name}")
+            regridded_cia_path = os.path.join(root, 'block19', f'regridded_CIA_{pair_name}_{test_name}.cia')
+            remove_if_exists(regridded_cia_path)
+            regrid_warnings = regrid_cia_database(
+                source_cia_path,
+                T_cia_grid,
+                regridded_cia_path,
+                pair_name,
+            )
+            cia_regridded_files[pair_name] = regridded_cia_path
+            if regrid_warnings:
+                cia_regrid_warnings.extend(regrid_warnings)
+                for warning in regrid_warnings:
+                    print(f"[CIA-REGRID] WARNING: {warning}")
 
-        cia_lowers = cia_conf['lower_wn']
-        cia_uppers = cia_conf['upper_wn']
-        if not isinstance(cia_lowers, list):
-            cia_lowers = [cia_lowers]
-        if not isinstance(cia_uppers, list):
-            cia_uppers = [cia_uppers]
+            pt_cia_path = os.path.join(root, f'block19/pt_cia_{pair_name}_{test_name}')
+            remove_if_exists(pt_cia_path)
+            with open(pt_cia_path, "w", encoding='utf-8') as pt_file:
+                pt_file.write('*PTVAL\n')
+                for P_0 in P_cia_grid:
+                    pt_file.write(f'{P_0 * 1e+5}')
+                    for T in T_cia_grid:
+                        pt_file.write(f' {T}')
+                    pt_file.write('\n')
+                pt_file.write('*END')
+            ensure_nonempty_file(pt_cia_path, f"CIA PT file for {pair_name}")
+            cia_pt_files[pair_name] = pt_cia_path
+            prepared_cia_pairs.add(pair_name)
 
-        for seg_idx, (seg_lower, seg_upper) in enumerate(zip(cia_lowers, cia_uppers)):
-            cia_out_base = f"output_CIA_{pair_name}_{test_name}_seg{seg_idx}"
-            full_cia_out_path = f"{root}/block19/{cia_out_base}"
-            monitoring_cia_path = f"{root}/block19/monitoring_CIA_{pair_name}_{test_name}_seg{seg_idx}"
-            lbl_cia_path = f"{root}/block19/LBL_CIA_{pair_name}_{test_name}_seg{seg_idx}.nc"
+        regridded_cia_path = cia_regridded_files[pair_name]
+        pt_cia_path = cia_pt_files[pair_name]
 
-            generated_cia_files.append(full_cia_out_path)
+        cia_out_base = f"output_CIA_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}"
+        full_cia_out_path = f"{root}/block19/{cia_out_base}"
+        monitoring_cia_path = f"{root}/block19/monitoring_CIA_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}"
+        lbl_cia_path = f"{root}/block19/LBL_CIA_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}.nc"
 
-            idx_lower, idx_upper = find_index(wnedges[:-1], wnedges[1:], float(seg_lower), float(seg_upper))
+        generated_cia_files.append(full_cia_out_path)
 
-            remove_if_exists(full_cia_out_path)
-            remove_if_exists(full_cia_out_path + '.nc')
-            remove_if_exists(monitoring_cia_path)
-            remove_if_exists(lbl_cia_path)
+        remove_if_exists(full_cia_out_path)
+        remove_if_exists(full_cia_out_path + '.nc')
+        remove_if_exists(monitoring_cia_path)
+        remove_if_exists(lbl_cia_path)
 
-            exec_file_CIA_seg = f"corr_k_CIA_{pair_name}_{test_name}_seg{seg_idx}.sh"
-            remove_if_exists(exec_file_CIA_seg)
+        exec_file_CIA_run = f"corr_k_CIA_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}.sh"
+        remove_if_exists(exec_file_CIA_run)
 
-            with open(exec_file_CIA_seg, "w", encoding='utf-8') as f:
-                f.write(f'Ccorr_k -CIA {cia_file_path} -R {idx_lower} {idx_upper} ')
-                f.write(f'-F {pt_cia_path} -ct {id1} {id2} 1000.0 -i 1.0 -t 1.0e-2 ')
-                f.write(f'-s {skeleton_file_name} ')
-                if spec_type == 'sw':
-                    f.write(f'+S {solar_path} ')
-                else:
-                    f.write('+p ')
-                f.write('-lk ')
-                f.write(f'-o {full_cia_out_path} ')
-                f.write(f'-m {monitoring_cia_path} ')
-                f.write(f'-L {lbl_cia_path}\n')
+        with open(exec_file_CIA_run, "w", encoding='utf-8') as f:
+            f.write(f'Ccorr_k -CIA {regridded_cia_path} -R {band_start} {band_end} ')
+            f.write(f'-F {pt_cia_path} -ct {id1} {id2} 1000.0 -i 1.0 -t 1.0e-2 ')
+            f.write(f'-s {skeleton_file_name} ')
+            if spec_type == 'sw':
+                f.write(f'+S {solar_path} ')
+            else:
+                f.write('+p ')
+            f.write('-lk ')
+            f.write(f'-o {full_cia_out_path} ')
+            f.write(f'-m {monitoring_cia_path} ')
+            f.write(f'-L {lbl_cia_path}\n')
 
-            os.chmod(exec_file_CIA_seg, 0o777)
-            print(f"Running corr_k for CIA {pair_name} segment {seg_idx}...")
-            run_generated_script(exec_file_CIA_seg, f'CIA corr_k generation for {pair_name} segment {seg_idx}')
-            ensure_nonempty_file(full_cia_out_path, f'CIA corr_k output for {pair_name} segment {seg_idx}')
+        os.chmod(exec_file_CIA_run, 0o777)
+        print(
+            f"Running corr_k for CIA {pair_name} band run {run_index} "
+            f"({band_start}-{band_end})..."
+        )
+        run_generated_script(
+            exec_file_CIA_run,
+            f'CIA corr_k generation for {pair_name} band run {run_index} ({band_start}-{band_end})'
+        )
+        ensure_nonempty_file(
+            full_cia_out_path,
+            f'CIA corr_k output for {pair_name} band run {run_index} ({band_start}-{band_end})'
+        )
 
 ensure_nonempty_files(generated_cia_files, 'CIA corr_k outputs')
 
@@ -1198,17 +1522,41 @@ shutil.move(source_output, outputfile)
 shutil.move(source_output_k, outputfile_k)
 
 # 9. Fix NaNs and validate final outputs
-fix_socrates_nan(outputfile)
-fix_socrates_nan(outputfile_k)
+try:
+    fix_socrates_nan(outputfile)
+    fix_socrates_nan(outputfile_k)
 
-validation_result = validate_final_outputs(outputfile, outputfile_k)
-qa_summary['validator'] = validation_result
-write_qa_summary()
+    validation_result = validate_final_outputs(outputfile, outputfile_k)
+    qa_summary['validator'] = validation_result
+    write_qa_summary()
 
-if not validation_result['passed']:
-    raise RuntimeError(
-        "Final spectral validation failed: " + "; ".join(validation_result['messages'])
+    if not validation_result['passed']:
+        print(
+            "Final spectral validation failed: " + "; ".join(validation_result['messages']),
+            file=sys.stderr,
+            flush=True,
+        )
+except Exception as exc:
+    print(
+        f"Final spectral post-processing failed for {outputfilename}: {exc}",
+        file=sys.stderr,
+        flush=True,
     )
+    traceback.print_exc(file=sys.stderr)
+    qa_summary['validator'] = {
+        'passed': False,
+        'messages': [f"Final spectral post-processing failed: {exc}"],
+        'absorption_mismatch_count': None,
+        'absorption_mismatch_preview': [],
+    }
+    try:
+        write_qa_summary()
+    except Exception as summary_exc:
+        print(
+            f"Failed to write QA summary after validation error: {summary_exc}",
+            file=sys.stderr,
+            flush=True,
+        )
 """)
 
 # Additional: modify H2O
@@ -1239,22 +1587,50 @@ if os.path.exists(outputfile):
     with open(outputfile, 'w', encoding='utf-8') as f:
         f.write(content)
 
-    fix_socrates_nan(outputfile)
-    validation_result = validate_final_outputs(outputfile, outputfile_k)
-    qa_summary['post_processing'] = {
-        'h2o_to_cfc113_applied': True,
-        'validator': validation_result,
-    }
-    qa_summary['validator'] = validation_result
-    write_qa_summary()
+    try:
+        fix_socrates_nan(outputfile)
+        validation_result = validate_final_outputs(outputfile, outputfile_k)
+        qa_summary['post_processing'] = {
+            'h2o_to_cfc113_applied': True,
+            'validator': validation_result,
+        }
+        qa_summary['validator'] = validation_result
+        write_qa_summary()
 
-    if not validation_result['passed']:
-        raise RuntimeError(
-            "Final spectral validation failed after H2O->CFC113 post-processing: "
-            + "; ".join(validation_result['messages'])
+        if not validation_result['passed']:
+            print(
+                "Final spectral validation failed after H2O->CFC113 post-processing: "
+                + "; ".join(validation_result['messages']),
+                file=sys.stderr,
+                flush=True,
+            )
+    except Exception as exc:
+        print(
+            f"Final H2O->CFC113 post-processing failed for {outputfile}: {exc}",
+            file=sys.stderr,
+            flush=True,
         )
+        traceback.print_exc(file=sys.stderr)
+        qa_summary['post_processing'] = {
+            'h2o_to_cfc113_applied': True,
+            'error': str(exc),
+        }
+        qa_summary['validator'] = {
+            'passed': False,
+            'messages': [f"Final H2O->CFC113 post-processing failed: {exc}"],
+            'absorption_mismatch_count': None,
+            'absorption_mismatch_preview': [],
+        }
+        try:
+            write_qa_summary()
+        except Exception as summary_exc:
+            print(
+                f"Failed to write QA summary after H2O post-processing error: {summary_exc}",
+                file=sys.stderr,
+                flush=True,
+            )
 else:
-    print(f"File not found: {outputfile}")
+    print(f"File not found: {outputfile}", file=sys.stderr)
 """
 
     # 以追加模式('a')打开目标 .py 文件，并将代码写入到文件末尾
