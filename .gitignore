@@ -42,3 +42,4 @@ parse_cia.py
 util/backup
 *bak*
 *codex*
+out/
