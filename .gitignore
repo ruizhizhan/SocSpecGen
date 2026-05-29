@@ -44,3 +44,4 @@ util/backup
 *codex*
 out/
 job_BASE.slurm
+.portal
