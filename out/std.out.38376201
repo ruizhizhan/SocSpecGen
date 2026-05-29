@@ -1,0 +1,18 @@
+The start time is: 2026-05-29 18:14:06 
+
+My job ID is: 38376201 
+
+The total cores is: 1 
+
+The hosts is: 
+
+a03r3n14:1
+
+
+272:        'ckd_rel_path': 'hitran/H2O-H2O_v4.3/absco-ref_wv-mt-ckd.nc',
+273:        'ckd_296_rel_path': 'hitran/H2O-H2O_v4.3/mt_ckd4p3_s296',
+274:        'ckd_260_rel_path': 'hitran/H2O-H2O_v4.3/mt_ckd4p3_s260',
+/work/home/ac9b0k6rio/SocSpecGen/spectral_file_manager.py:672:        base_dir = os.path.dirname(cia_conf.get('ckd_rel_path', 'hitran/H2O-H2O_v4.3/absco-ref_wv-mt-ckd.nc'))
+/work/home/ac9b0k6rio/SocSpecGen/slurms/sp_b96_Trappist-1_sphinx_Snowline/sp_b96_Trappist-1_sphinx_Snowline_lw.py:35:RELEVANT_CIA_CONFIGS = {'H2O-H2O': {'continuum_kind': 'mt_ckd_h2o_self', 'ckd_rel_path': 'hitran/H2O-H2O_v4.3/absco-ref_wv-mt-ckd.nc', 'ckd_296_rel_path': 'hitran/H2O-H2O_v4.3/mt_ckd4p3_s296', 'ckd_260_rel_path': 'hitran/H2O-H2O_v4.3/mt_ckd4p3_s260', 'lower_wn': [1.0], 'upper_wn': [20000.0], 't_grid': [293, 296], 'p_grid': [1.0], 'max_path': 1000.0, 'line_inc': 1.0, 'fit_tol': 0.01}}
+/work/home/ac9b0k6rio/SocSpecGen/slurms/sp_b96_Trappist-1_sphinx_Snowline/sp_b96_Trappist-1_sphinx_Snowline_lw.py:133:        base_dir = os.path.dirname(cia_conf.get('ckd_rel_path', 'hitran/H2O-H2O_v4.3/absco-ref_wv-mt-ckd.nc'))
+The end time is: 2026-05-29 18:14:06

@@ -285,6 +285,34 @@ def validate_cia_task_plan(cia_task_plan: List[Dict], cia_band_coverage: Dict[st
         if len(bands_by_pair.get(pair_name, [])) != len(actual_bands):
             raise ValueError(f"CIA pair {pair_name} has duplicate band assignments in the task plan")
 
+
+def get_continuum_kind(cia_conf: Dict) -> str:
+    """
+    Classify continuum inputs. The default is a HITRAN .cia database.
+    """
+    return str(cia_conf.get('continuum_kind', 'hitran_cia'))
+
+
+def is_mt_ckd_h2o_self_continuum(cia_conf: Dict) -> bool:
+    return get_continuum_kind(cia_conf) == 'mt_ckd_h2o_self'
+
+
+def validate_cia_config(pair_name: str, cia_conf: Dict) -> None:
+    kind = get_continuum_kind(cia_conf)
+    if kind == 'hitran_cia':
+        missing = [key for key in ('cia_rel_path', 'cia_file') if key not in cia_conf]
+    elif kind == 'mt_ckd_h2o_self':
+        has_explicit_tables = all(
+            key in cia_conf for key in ('ckd_296_rel_path', 'ckd_260_rel_path')
+        )
+        has_base_path = 'ckd_rel_path' in cia_conf
+        missing = [] if (has_explicit_tables or has_base_path) else ['ckd_rel_path']
+    else:
+        raise ValueError(f"Unsupported continuum_kind for {pair_name}: {kind}")
+
+    if missing:
+        raise ValueError(f"Continuum pair {pair_name} is missing required field(s): {missing}")
+
 def calculate_band_occupancy(
     wnedges: np.ndarray, 
     selected_gases: List[str], 
@@ -414,12 +442,15 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
     molecules_str = [g['molecule'] for g in current_gas_configs]
     gas_ids = [g['gas_id'] for g in current_gas_configs]
     update_library = getattr(cfg, 'UPDATE_LIBRARY', True)
+    write_qa_summary_enabled = getattr(cfg, 'WRITE_QA_SUMMARY', True)
     cia_t_grid_policy = getattr(cfg, 'CIA_T_GRID_POLICY', 'native')
     cia_shared_t_grid = getattr(cfg, 'CIA_SHARED_T_GRID', None)
     
     candidate_cia_tuples = get_active_cias(selected_gases_list)
     active_cia_tuples = candidate_cia_tuples if cfg.INCLUDE_CIA else []
     relevant_cia_configs = {pair: cfg.CIA_LIBRARY[pair] for _, _, pair in active_cia_tuples}
+    for pair_name, cia_conf in relevant_cia_configs.items():
+        validate_cia_config(pair_name, cia_conf)
     forced_cia_t_grids = getattr(cfg, 'CIA_T_GRID_OVERRIDE_BY_PAIR', None)
     cia_t_grids_by_pair, cia_grid_warnings = resolve_cia_t_grids(
         active_cia_tuples,
@@ -527,6 +558,7 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
         f.write(f"root = '{cfg.ROOT_DIR}'\n")
         f.write(f"num_kterm = {cfg.NUM_KTERM}\n")
         f.write(f"update_library = {update_library}\n")
+        f.write(f"write_qa_summary_enabled = {write_qa_summary_enabled}\n")
         f.write(f"cia_t_grid_policy = '{cia_t_grid_policy}'\n")
         f.write(f"cia_shared_t_grid = {cia_shared_t_grid}\n")
         f.write(f"cia_grid_warnings = {cia_grid_warnings}\n")
@@ -559,15 +591,37 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
 
         # --- Worker Logic ---
         f.write(r"""
+ALL_GAS_CONFIGS = list(GAS_CONFIGS)
+
+def lbl_path_for_gas_config(config):
+    molecule = config['molecule']
+    datasource = config['gas_abs_config']['datasource']
+    return os.path.join(root, f'abs_coeff/{molecule}_{datasource}_{test_name}.nc')
+
+def lbl_map_path_for_gas_config(config):
+    molecule = config['molecule']
+    datasource = config['gas_abs_config']['datasource']
+    return os.path.join(root, f'block5/map_{molecule}_{datasource}_{test_name}.nc')
+
 output_path_list = []
 mon_path_list = []
 LbL_path_list = []
+LbL_map_path_list = []
 output_path_xuv_list = []
 generated_cia_files = []
 cia_regridded_files = {}
+continuum_source_files = {}
 cia_pt_files = {}
 cia_regrid_warnings = []
 prepared_cia_pairs = set()
+gas_id_to_lbl_path = {
+    config['gas_id']: lbl_path_for_gas_config(config)
+    for config in ALL_GAS_CONFIGS
+}
+gas_id_to_lbl_map_path = {
+    config['gas_id']: lbl_map_path_for_gas_config(config)
+    for config in ALL_GAS_CONFIGS
+}
 
 final_dir = os.path.join(root, f'spectral_files/sp_b{band_num}')
 outputfile = os.path.join(final_dir, outputfilename)
@@ -596,6 +650,7 @@ qa_summary = {
     'missing_gas_bands': MISSING_GAS_BANDS,
     'empty_band_numbers': EMPTY_BAND_NUMBERS,
     'cia_regridded_files': cia_regridded_files,
+    'continuum_source_files': continuum_source_files,
     'cia_regrid_warnings': cia_regrid_warnings,
 }
 
@@ -618,6 +673,27 @@ def ensure_nonempty_file(path, description):
 def ensure_nonempty_files(paths, description):
     for path in paths:
         ensure_nonempty_file(path, description)
+
+
+def continuum_kind(cia_conf):
+    return str(cia_conf.get('continuum_kind', 'hitran_cia'))
+
+
+def is_mt_ckd_h2o_self_continuum(cia_conf):
+    return continuum_kind(cia_conf) == 'mt_ckd_h2o_self'
+
+
+def mt_ckd_h2o_self_paths(cia_conf):
+    ckd_296_rel_path = cia_conf.get('ckd_296_rel_path')
+    ckd_260_rel_path = cia_conf.get('ckd_260_rel_path')
+    if ckd_296_rel_path or ckd_260_rel_path:
+        if not ckd_296_rel_path or not ckd_260_rel_path:
+            raise ValueError("MT_CKD H2O self continuum requires both ckd_296_rel_path and ckd_260_rel_path")
+    else:
+        base_dir = os.path.dirname(cia_conf.get('ckd_rel_path', 'hitran/H2O-H2O_v4.3/absco-ref_wv-mt-ckd.nc'))
+        ckd_296_rel_path = os.path.join(base_dir, 'mt_ckd4p3_s296')
+        ckd_260_rel_path = os.path.join(base_dir, 'mt_ckd4p3_s260')
+    return os.path.join(root, ckd_296_rel_path), os.path.join(root, ckd_260_rel_path)
 
 
 def run_generated_script(script_path, description):
@@ -972,6 +1048,8 @@ def validate_final_outputs(sp_path, spk_path):
 
 
 def write_qa_summary():
+    if not write_qa_summary_enabled:
+        return
     os.makedirs(final_dir, exist_ok=True)
     with open(qa_summary_path, 'w', encoding='utf-8') as handle:
         json.dump(qa_summary, handle, indent=2, sort_keys=True)
@@ -1184,9 +1262,13 @@ for config in GAS_CONFIGS:
     output_path, mon_path, LbL_path, T_grid, P_grid = generate_LBL_from_ExoMol_hdf5(
         root, hdf5_path, Molecule_str, datasource, update_library, test_name
     )
+    LbL_map_path = lbl_map_path_for_gas_config(config)
     output_path_list.append(output_path)
     mon_path_list.append(mon_path)
     LbL_path_list.append(LbL_path)
+    LbL_map_path_list.append(LbL_map_path)
+    gas_id_to_lbl_path[gas_id] = LbL_path
+    gas_id_to_lbl_map_path[gas_id] = LbL_map_path
 
     pt_file_path = os.path.join(root, f'block5/pt_file_{test_name}_{gas_id}')
     remove_if_exists(pt_file_path)
@@ -1256,7 +1338,7 @@ run_generated_script(exec_file_name, 'prep_spec skeleton generation')
 ensure_nonempty_file(skeleton_file_name, 'skeleton spectral file')
 
 # 4. Generate corrk data for gases
-for config, output_path, mon_path, LbL_path in zip(GAS_CONFIGS, output_path_list, mon_path_list, LbL_path_list):
+for config, output_path, mon_path, LbL_path, LbL_map_path in zip(GAS_CONFIGS, output_path_list, mon_path_list, LbL_path_list, LbL_map_path_list):
     gas_id = config['gas_id']
     lower = config['gas_abs_config']['lower_wn']
     upper = config['gas_abs_config']['upper_wn']
@@ -1264,6 +1346,7 @@ for config, output_path, mon_path, LbL_path in zip(GAS_CONFIGS, output_path_list
     print(f"Running corr_k for Gas ID {gas_id}...")
     exec_file_corrk = f"corr_k_ExoMol_{test_name}_{gas_id}.sh"
     remove_if_exists(exec_file_corrk)
+    remove_if_exists(LbL_map_path)
 
     with open(exec_file_corrk, "w", encoding='utf-8') as f:
         idx_lower, idx_upper = find_index(wnedges[:-1], wnedges[1:], lower, upper, strict_band_edges=True)
@@ -1282,11 +1365,13 @@ for config, output_path, mon_path, LbL_path in zip(GAS_CONFIGS, output_path_list
         f.write(f'-o {output_path} ')
         f.write(f'-m {mon_path} ')
         f.write(f'-L {LbL_path} ')
+        f.write(f'-sm {LbL_map_path} ')
         f.write('-np 1\n')
 
     os.chmod(exec_file_corrk, 0o777)
     run_generated_script(exec_file_corrk, f'gas corr_k generation for {gas_id}')
     ensure_nonempty_file(output_path, f'gas corr_k output for {gas_id}')
+    ensure_nonempty_file(LbL_map_path, f'line absorption map for gas {gas_id}')
 
 ensure_nonempty_files(output_path_list, 'gas corr_k outputs')
 
@@ -1307,22 +1392,31 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
             T_cia_grid = np.array(CIA_T_GRIDS_BY_PAIR[pair_name], dtype=float)
             P_cia_grid = np.array(cia_conf.get('p_grid', [1.0]), dtype=float)
 
-            source_cia_path = os.path.join(root, cia_conf['cia_rel_path'], cia_conf['cia_file'])
-            ensure_nonempty_file(source_cia_path, f"CIA input file for {pair_name}")
+            if is_mt_ckd_h2o_self_continuum(cia_conf):
+                source_ckd_296_path, source_ckd_260_path = mt_ckd_h2o_self_paths(cia_conf)
+                ensure_nonempty_file(source_ckd_296_path, f"MT_CKD H2O 296K self-continuum input file for {pair_name}")
+                ensure_nonempty_file(source_ckd_260_path, f"MT_CKD H2O 260K self-continuum input file for {pair_name}")
+                continuum_source_files[pair_name] = {
+                    's296': source_ckd_296_path,
+                    's260': source_ckd_260_path,
+                }
+            else:
+                source_cia_path = os.path.join(root, cia_conf['cia_rel_path'], cia_conf['cia_file'])
+                ensure_nonempty_file(source_cia_path, f"CIA input file for {pair_name}")
 
-            regridded_cia_path = os.path.join(root, 'block19', f'regridded_CIA_{pair_name}_{test_name}.cia')
-            remove_if_exists(regridded_cia_path)
-            regrid_warnings = regrid_cia_database(
-                source_cia_path,
-                T_cia_grid,
-                regridded_cia_path,
-                pair_name,
-            )
-            cia_regridded_files[pair_name] = regridded_cia_path
-            if regrid_warnings:
-                cia_regrid_warnings.extend(regrid_warnings)
-                for warning in regrid_warnings:
-                    print(f"[CIA-REGRID] WARNING: {warning}")
+                regridded_cia_path = os.path.join(root, 'block19', f'regridded_CIA_{pair_name}_{test_name}.cia')
+                remove_if_exists(regridded_cia_path)
+                regrid_warnings = regrid_cia_database(
+                    source_cia_path,
+                    T_cia_grid,
+                    regridded_cia_path,
+                    pair_name,
+                )
+                cia_regridded_files[pair_name] = regridded_cia_path
+                if regrid_warnings:
+                    cia_regrid_warnings.extend(regrid_warnings)
+                    for warning in regrid_warnings:
+                        print(f"[CIA-REGRID] WARNING: {warning}")
 
             pt_cia_path = os.path.join(root, f'block19/pt_cia_{pair_name}_{test_name}')
             remove_if_exists(pt_cia_path)
@@ -1338,13 +1432,17 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
             cia_pt_files[pair_name] = pt_cia_path
             prepared_cia_pairs.add(pair_name)
 
-        regridded_cia_path = cia_regridded_files[pair_name]
         pt_cia_path = cia_pt_files[pair_name]
 
-        cia_out_base = f"output_CIA_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}"
+        output_prefix = "output_MTC" if is_mt_ckd_h2o_self_continuum(cia_conf) else "output_CIA"
+        monitor_prefix = "monitoring_MTC" if is_mt_ckd_h2o_self_continuum(cia_conf) else "monitoring_CIA"
+        write_lbl_for_continuum = not is_mt_ckd_h2o_self_continuum(cia_conf)
+        lbl_prefix = "LBL_MTC" if is_mt_ckd_h2o_self_continuum(cia_conf) else "LBL_CIA"
+
+        cia_out_base = f"{output_prefix}_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}"
         full_cia_out_path = f"{root}/block19/{cia_out_base}"
-        monitoring_cia_path = f"{root}/block19/monitoring_CIA_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}"
-        lbl_cia_path = f"{root}/block19/LBL_CIA_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}.nc"
+        monitoring_cia_path = f"{root}/block19/{monitor_prefix}_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}"
+        lbl_cia_path = f"{root}/block19/{lbl_prefix}_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}.nc"
 
         generated_cia_files.append(full_cia_out_path)
 
@@ -1353,35 +1451,85 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
         remove_if_exists(monitoring_cia_path)
         remove_if_exists(lbl_cia_path)
 
-        exec_file_CIA_run = f"corr_k_CIA_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}.sh"
+        exec_prefix = "corr_k_MTC" if is_mt_ckd_h2o_self_continuum(cia_conf) else "corr_k_CIA"
+        exec_file_CIA_run = f"{exec_prefix}_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}.sh"
         remove_if_exists(exec_file_CIA_run)
 
         with open(exec_file_CIA_run, "w", encoding='utf-8') as f:
-            f.write(f'Ccorr_k -CIA {regridded_cia_path} -R {band_start} {band_end} ')
-            f.write(f'-F {pt_cia_path} -ct {id1} {id2} 1000.0 -i 1.0 -t 1.0e-2 ')
+            if is_mt_ckd_h2o_self_continuum(cia_conf):
+                source_ckd_paths = continuum_source_files[pair_name]
+                max_path = float(cia_conf.get('max_path', 1000.0))
+                nu_cutoff = float(cia_conf.get('nu_cutoff', 2500.0))
+                line_inc = float(cia_conf.get('line_inc', 1.0))
+                fit_type = str(cia_conf.get('fit_type', 'b'))
+                fit_tol = float(cia_conf.get('fit_tol', 1.0e-3))
+                nproc = int(cia_conf.get('nproc', 30))
+                lbl_map_path = gas_id_to_lbl_map_path.get(id1)
+                if not lbl_map_path:
+                    raise ValueError(f"Missing line absorption map path for MT_CKD gas id {id1}")
+                use_lbl_map = os.path.exists(lbl_map_path) and os.path.getsize(lbl_map_path) > 0
+                if not use_lbl_map and not BLOCK19_ONLY_TEST:
+                    ensure_nonempty_file(lbl_map_path, f"MT_CKD line absorption map for {pair_name}")
+                fit_flag = {
+                    'n': '-n 10',
+                    't': f'-t {fit_tol}',
+                    'b': f'-b {fit_tol}',
+                }.get(fit_type)
+                if not fit_flag:
+                    raise ValueError(f"Unsupported MT_CKD fit_type for {pair_name}: {fit_type}")
+                f.write('set -e\n')
+                f.write(f'Ccorr_k -F {pt_cia_path} ')
+                f.write(f'-R {band_start} {band_end} ')
+                f.write(f'-c {nu_cutoff:.3f} ')
+                f.write(f'-i {line_inc:.3f} ')
+                f.write(f'-ct {id1} {id2} {max_path:.3e} ')
+                f.write(f'{fit_flag} ')
+                f.write(f'-e {source_ckd_paths["s296"]} {source_ckd_paths["s260"]} ')
+            else:
+                regridded_cia_path = cia_regridded_files[pair_name]
+                max_path = float(cia_conf.get('max_path', 1000.0))
+                line_inc = float(cia_conf.get('line_inc', 1.0))
+                fit_tol = float(cia_conf.get('fit_tol', 1.0e-2))
+                f.write(f'Ccorr_k -CIA {regridded_cia_path} -R {band_start} {band_end} ')
+                f.write(f'-F {pt_cia_path} -ct {id1} {id2} {max_path} -i {line_inc} -t {fit_tol} ')
             f.write(f'-s {skeleton_file_name} ')
-            if spec_type == 'sw':
+            if spec_type == 'sw' and not is_mt_ckd_h2o_self_continuum(cia_conf):
                 f.write(f'+S {solar_path} ')
             else:
                 f.write('+p ')
             f.write('-lk ')
             f.write(f'-o {full_cia_out_path} ')
             f.write(f'-m {monitoring_cia_path} ')
-            f.write(f'-L {lbl_cia_path}\n')
+            if is_mt_ckd_h2o_self_continuum(cia_conf):
+                if use_lbl_map:
+                    f.write(f'-lm {lbl_map_path} ')
+                else:
+                    print(
+                        f"[MT_CKD] No line absorption map found for {pair_name}: {lbl_map_path}; "
+                        "omitting -lm for this block19-only run."
+                    )
+                print(
+                    f"[MT_CKD] Omitting -L mapping output for {pair_name}; "
+                    "this SOCRATES build can stop while writing the MT_CKD netCDF map, "
+                    "and the block19 k-table text output does not need it."
+                )
+                f.write(f'-np {nproc}')
+            elif write_lbl_for_continuum:
+                f.write(f'-L {lbl_cia_path}')
+            f.write('\n')
 
         os.chmod(exec_file_CIA_run, 0o777)
-        print(
-            f"Running corr_k for CIA {pair_name} band run {run_index} "
-            f"({band_start}-{band_end})..."
-        )
+        continuum_label = "MT_CKD self-continuum" if is_mt_ckd_h2o_self_continuum(cia_conf) else "CIA"
+        print(f"Running corr_k for {continuum_label} {pair_name} band run {run_index} ({band_start}-{band_end})...")
         run_generated_script(
             exec_file_CIA_run,
-            f'CIA corr_k generation for {pair_name} band run {run_index} ({band_start}-{band_end})'
+            f'{continuum_label} corr_k generation for {pair_name} band run {run_index} ({band_start}-{band_end})'
         )
         ensure_nonempty_file(
             full_cia_out_path,
-            f'CIA corr_k output for {pair_name} band run {run_index} ({band_start}-{band_end})'
+            f'{continuum_label} corr_k output for {pair_name} band run {run_index} ({band_start}-{band_end})'
         )
+        fix_socrates_nan(full_cia_out_path)
 
 ensure_nonempty_files(generated_cia_files, 'CIA corr_k outputs')
 
@@ -1713,8 +1861,8 @@ if __name__ == "__main__":
     write_worker_script(job_dir, f"{job_identifier}_lw.py", test_name, SELECTED_MOLECULES, 'lw')
     write_worker_script(job_dir, f"{job_identifier}_sw.py", test_name, SELECTED_MOLECULES, 'sw')
     
-    # if 'H2O' in SELECTED_MOLECULES, modify H2O to CFC113
-    if 'H2O' in SELECTED_MOLECULES:
+    # Optional legacy post-processing for CFC113 experiments.
+    if 'H2O' in SELECTED_MOLECULES and getattr(cfg, 'ENABLE_H2O_TO_CFC113_POSTPROCESS', False):
         modify_h2o_to_cfc113(job_dir, f"{job_identifier}_lw.py")
         modify_h2o_to_cfc113(job_dir, f"{job_identifier}_sw.py")
         

@@ -1,0 +1,26 @@
+The start time is: 2026-05-29 19:00:46 
+
+My job ID is: 38378986 
+
+The total cores is: 1 
+
+The hosts is: 
+
+a02r4n18:1
+
+
+279:        'max_path': 1.0e1,
+280:        'nu_cutoff': 2500.0,
+282:        'fit_type': 'b',
+284:        'nproc': 30,
+/work/home/ac9b0k6rio/SocSpecGen/spectral_file_manager.py:1465:                f.write(f'-c {nu_cutoff:.3f} ')
+/work/home/ac9b0k6rio/SocSpecGen/spectral_file_manager.py:1467:                f.write(f'-ct {id1} {id2} {max_path:.3e} ')
+/work/home/ac9b0k6rio/SocSpecGen/spectral_file_manager.py:1476:                f.write(f'-F {pt_cia_path} -ct {id1} {id2} {max_path} -i {line_inc} -t {fit_tol} ')
+/work/home/ac9b0k6rio/SocSpecGen/spectral_file_manager.py:1487:                f.write(f'-lm {lbl_map_path} ')
+/work/home/ac9b0k6rio/SocSpecGen/spectral_file_manager.py:1488:                f.write(f'-np {nproc}')
+/work/home/ac9b0k6rio/SocSpecGen/slurms/sp_b96_Trappist-1_sphinx_Snowline/sp_b96_Trappist-1_sphinx_Snowline_lw.py:929:                f.write(f'-c {nu_cutoff:.3f} ')
+/work/home/ac9b0k6rio/SocSpecGen/slurms/sp_b96_Trappist-1_sphinx_Snowline/sp_b96_Trappist-1_sphinx_Snowline_lw.py:931:                f.write(f'-ct {id1} {id2} {max_path:.3e} ')
+/work/home/ac9b0k6rio/SocSpecGen/slurms/sp_b96_Trappist-1_sphinx_Snowline/sp_b96_Trappist-1_sphinx_Snowline_lw.py:940:                f.write(f'-F {pt_cia_path} -ct {id1} {id2} {max_path} -i {line_inc} -t {fit_tol} ')
+/work/home/ac9b0k6rio/SocSpecGen/slurms/sp_b96_Trappist-1_sphinx_Snowline/sp_b96_Trappist-1_sphinx_Snowline_lw.py:951:                f.write(f'-lm {lbl_map_path} ')
+/work/home/ac9b0k6rio/SocSpecGen/slurms/sp_b96_Trappist-1_sphinx_Snowline/sp_b96_Trappist-1_sphinx_Snowline_lw.py:952:                f.write(f'-np {nproc}')
+The end time is: 2026-05-29 19:00:46

@@ -40,3 +40,5 @@ parse_cia.py
 *.err
 *.out
 util/backup
+*bak*
+*codex*

@@ -10,12 +10,13 @@ NT = '62'
 NP = '22'
 RES = '001'
 # choose the correct hdf5 file (different broadening, ...)
-MOLEULES_TO_INCLUDE = ['CO2','O2']
-STAR_NAME = 'K7_5V_phoenix'
+MOLEULES_TO_INCLUDE = ['H2O']
+STAR_NAME = 'Trappist-1_sphinx'
 NUM_KTERM = 20
 UPDATE_LIBRARY = False # only for first run for each ExoMol file
+WRITE_QA_SUMMARY = False # for debug
 # K7_5V_phoenix M2_5V_sphinx M8_5V_sphinx LHS3844_sphinx LTT1445A_sphinx Trappist-1_sphinx GJ486_sphinx GJ1132_sphinx GJ3929_sphinx 
-TEST_NAME = f'{STAR_NAME}_CO2_O2'
+TEST_NAME = f'{STAR_NAME}_Snowline'
 
 # ==========================================
 # 2. Gas Library (Absorption & UV only)
@@ -83,7 +84,7 @@ GAS_LIBRARY = {
     },
     'H2O': {
         'molecule': '1H2_16O', 
-        'gas_id': '1', # cfc113 in GCM!
+        'gas_id': '1',
         'gas_abs_config': {
             'hdf5_rel_path': f'ExoMol/hdf5/H2O/H2O_POZAKATEL_1.0-41200.0_T{NT}xP{NP}_{RES}.h5',
             'datasource': f'H2O_T{NT}xP{NP}_{RES}',
@@ -153,7 +154,7 @@ GAS_LIBRARY = {
     # rock and metal vapor below
     'SiO': {
         'molecule': '28Si_16O',
-        'gas_id': '17', # hcfc22
+        'gas_id': '77',
         'gas_abs_config': {
             'hdf5_rel_path': 'ExoMol/hdf5/SiO/SiO_UVenIR_CO2broad_1.0-66500.0_T62xP22_001.h5',
             'datasource': 'SiO_T62xP22_001',
@@ -164,7 +165,7 @@ GAS_LIBRARY = {
     },
     'SiO2': {
         'molecule': '28Si_16O2',
-        'gas_id': '18', # hfc125
+        'gas_id': '78',
         'gas_abs_config': {
             'hdf5_rel_path': 'ExoMol/hdf5/SiO2/SiO2_OYT3_CO2broad_1.0-6000.0_T47xP22_001.h5',
             # 'ExoMol/hdf5/SiO2/SiO2_OYT3_1.0-6000.0_T47xP22_001.h5', # self broad
@@ -176,7 +177,7 @@ GAS_LIBRARY = {
     },
     'MgO': {
         'molecule': '24Mg_16O',
-        'gas_id': '18', # hfc125
+        'gas_id': '81',
         'gas_abs_config': {
             'hdf5_rel_path': 'ExoMol/hdf5/MgO/MgO_LiTY_1.0-30000.0_T62xP22_001.h5',
             # 'ExoMol/hdf5/MgO/MgO_LiTY_CO2broad_1.0-30000.0_T62xP22_001.h5'
@@ -206,7 +207,7 @@ GAS_LIBRARY = {
 # active pairs. This is a controlled approximation and may require extrapolation
 # for some pair/band combinations.
 CIA_T_GRID_POLICY = 'shared'
-CIA_SHARED_T_GRID = [250,300,500,1000]
+CIA_SHARED_T_GRID = [293, 296]
 CIA_T_GRID_OVERRIDE_BY_PAIR = {}
 
 CIA_LIBRARY = {
@@ -265,6 +266,22 @@ CIA_LIBRARY = {
         'upper_wn': [9545, 13840],
         't_grid': [293, 296],
         'p_grid': [1.0]
+    },
+    'H2O-H2O':{
+        'continuum_kind': 'mt_ckd_h2o_self',
+        'ckd_rel_path': 'hitran/H2O-H2O_v4.3/absco-ref_wv-mt-ckd.nc',
+        'ckd_296_rel_path': 'hitran/H2O-H2O_v4.3/mt_ckd4p3_s296',
+        'ckd_260_rel_path': 'hitran/H2O-H2O_v4.3/mt_ckd4p3_s260',
+        'lower_wn': [1.0],
+        'upper_wn': [20000.0],
+        't_grid': [293, 296],
+        'p_grid': [1.0],
+        'max_path': 1.0e1,
+        'nu_cutoff': 2500.0,
+        'line_inc': 1.0,
+        'fit_type': 'b',
+        'fit_tol': 1.0e-3,
+        'nproc': 30,
     }
     # parse_cia.py
 }
@@ -274,6 +291,7 @@ CIA_LIBRARY = {
 # ==========================================
 INCLUDE_CIA = True
 INCLUDE_SOLAR_SED = True
+ENABLE_H2O_TO_CFC113_POSTPROCESS = False
 
 # New Option: Ultra Hot Atmosphere (Calculate UV/Rayleigh for 'lw' if True)
 ULTRA_HOT_ATMOSPHERE = False 
