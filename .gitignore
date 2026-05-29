@@ -43,3 +43,4 @@ util/backup
 *bak*
 *codex*
 out/
+job_BASE.slurm
