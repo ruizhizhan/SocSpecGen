@@ -120,7 +120,24 @@ GAS_LIBRARY = {
     },
     'CH4': {},
     'H2': {},
-    'N2O': {},
+    'N2O': {
+        'molecule': '14N2_16O',
+        'gas_id': '4',
+        'gas_abs_config': {
+            'hdf5_rel_path': 'ExoMol/hdf5/N2O/N2O_TYM_1.0-20000.0_T62xP22_001.h5',
+            'datasource': 'N2O_T62xP22_001',
+            'lower_wn': 1.0,
+            'upper_wn': 20000.0,
+        },
+        'uv_config': { # 
+            'xuv_rel_path': 'ExoMol/14N2_16O/XUV/',
+            'xuv_file': 'N2O_JPL_2010.uvxsc',
+            'lower_wn': 1e7/240, # approx 20000 cm-1
+            'upper_wn': 1e7/160, # approx 200000 cm-1
+            't_grid': [298], # uv no need to be such high res
+            'p_grid': [1e-6,1e-5,1e-4,1e-3], # in bar, from 0.1 Pa to 100 Pa
+        }
+    },
     'NH3': {},
     'SO2': {
         'molecule': '32S_16O2',
@@ -269,19 +286,16 @@ CIA_LIBRARY = {
     },
     'H2O-H2O':{
         'continuum_kind': 'mt_ckd_h2o_self',
-        'ckd_rel_path': 'hitran/H2O-H2O_v4.3/absco-ref_wv-mt-ckd.nc',
-        'ckd_296_rel_path': 'hitran/H2O-H2O_v4.3/mt_ckd4p3_s296',
-        'ckd_260_rel_path': 'hitran/H2O-H2O_v4.3/mt_ckd4p3_s260',
+        'ckd_rel_path': 'hitran/H2O-H2O_v4.3/raw/absco-ref_wv-mt-ckd.nc',
         'lower_wn': [1.0],
         'upper_wn': [20000.0],
         't_grid': [293, 296],
         'p_grid': [1.0],
         'max_path': 1.0e1,
-        'nu_cutoff': 2500.0,
         'line_inc': 1.0,
         'fit_type': 'b',
         'fit_tol': 1.0e-3,
-        'nproc': 30,
+        'nproc': 1,
     }
     # parse_cia.py
 }

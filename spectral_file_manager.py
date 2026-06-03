@@ -606,7 +606,6 @@ def lbl_map_path_for_gas_config(config):
 output_path_list = []
 mon_path_list = []
 LbL_path_list = []
-LbL_map_path_list = []
 output_path_xuv_list = []
 generated_cia_files = []
 cia_regridded_files = {}
@@ -675,6 +674,14 @@ def ensure_nonempty_files(paths, description):
         ensure_nonempty_file(path, description)
 
 
+def ensure_netcdf_file(path, description):
+    ensure_nonempty_file(path, description)
+    with open(path, 'rb') as handle:
+        signature = handle.read(8)
+    if not (signature.startswith(b'CDF') or signature == b'\x89HDF\r\n\x1a\n'):
+        raise ValueError(f"Invalid NetCDF {description}: {path}")
+
+
 def continuum_kind(cia_conf):
     return str(cia_conf.get('continuum_kind', 'hitran_cia'))
 
@@ -684,16 +691,11 @@ def is_mt_ckd_h2o_self_continuum(cia_conf):
 
 
 def mt_ckd_h2o_self_paths(cia_conf):
-    ckd_296_rel_path = cia_conf.get('ckd_296_rel_path')
-    ckd_260_rel_path = cia_conf.get('ckd_260_rel_path')
-    if ckd_296_rel_path or ckd_260_rel_path:
-        if not ckd_296_rel_path or not ckd_260_rel_path:
-            raise ValueError("MT_CKD H2O self continuum requires both ckd_296_rel_path and ckd_260_rel_path")
-    else:
-        base_dir = os.path.dirname(cia_conf.get('ckd_rel_path', 'hitran/H2O-H2O_v4.3/absco-ref_wv-mt-ckd.nc'))
-        ckd_296_rel_path = os.path.join(base_dir, 'mt_ckd4p3_s296')
-        ckd_260_rel_path = os.path.join(base_dir, 'mt_ckd4p3_s260')
-    return os.path.join(root, ckd_296_rel_path), os.path.join(root, ckd_260_rel_path)
+    ckd_rel_path = cia_conf.get('ckd_rel_path')
+    if not ckd_rel_path:
+        raise ValueError("MT_CKD H2O self continuum requires ckd_rel_path")
+    ckd_path = os.path.join(root, ckd_rel_path)
+    return ckd_path, ckd_path
 
 
 def run_generated_script(script_path, description):
@@ -1262,13 +1264,10 @@ for config in GAS_CONFIGS:
     output_path, mon_path, LbL_path, T_grid, P_grid = generate_LBL_from_ExoMol_hdf5(
         root, hdf5_path, Molecule_str, datasource, update_library, test_name
     )
-    LbL_map_path = lbl_map_path_for_gas_config(config)
     output_path_list.append(output_path)
     mon_path_list.append(mon_path)
     LbL_path_list.append(LbL_path)
-    LbL_map_path_list.append(LbL_map_path)
     gas_id_to_lbl_path[gas_id] = LbL_path
-    gas_id_to_lbl_map_path[gas_id] = LbL_map_path
 
     pt_file_path = os.path.join(root, f'block5/pt_file_{test_name}_{gas_id}')
     remove_if_exists(pt_file_path)
@@ -1338,7 +1337,7 @@ run_generated_script(exec_file_name, 'prep_spec skeleton generation')
 ensure_nonempty_file(skeleton_file_name, 'skeleton spectral file')
 
 # 4. Generate corrk data for gases
-for config, output_path, mon_path, LbL_path, LbL_map_path in zip(GAS_CONFIGS, output_path_list, mon_path_list, LbL_path_list, LbL_map_path_list):
+for config, output_path, mon_path, LbL_path in zip(GAS_CONFIGS, output_path_list, mon_path_list, LbL_path_list):
     gas_id = config['gas_id']
     lower = config['gas_abs_config']['lower_wn']
     upper = config['gas_abs_config']['upper_wn']
@@ -1346,7 +1345,6 @@ for config, output_path, mon_path, LbL_path, LbL_map_path in zip(GAS_CONFIGS, ou
     print(f"Running corr_k for Gas ID {gas_id}...")
     exec_file_corrk = f"corr_k_ExoMol_{test_name}_{gas_id}.sh"
     remove_if_exists(exec_file_corrk)
-    remove_if_exists(LbL_map_path)
 
     with open(exec_file_corrk, "w", encoding='utf-8') as f:
         idx_lower, idx_upper = find_index(wnedges[:-1], wnedges[1:], lower, upper, strict_band_edges=True)
@@ -1365,13 +1363,11 @@ for config, output_path, mon_path, LbL_path, LbL_map_path in zip(GAS_CONFIGS, ou
         f.write(f'-o {output_path} ')
         f.write(f'-m {mon_path} ')
         f.write(f'-L {LbL_path} ')
-        f.write(f'-sm {LbL_map_path} ')
         f.write('-np 1\n')
 
     os.chmod(exec_file_corrk, 0o777)
     run_generated_script(exec_file_corrk, f'gas corr_k generation for {gas_id}')
     ensure_nonempty_file(output_path, f'gas corr_k output for {gas_id}')
-    ensure_nonempty_file(LbL_map_path, f'line absorption map for gas {gas_id}')
 
 ensure_nonempty_files(output_path_list, 'gas corr_k outputs')
 
@@ -1393,12 +1389,11 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
             P_cia_grid = np.array(cia_conf.get('p_grid', [1.0]), dtype=float)
 
             if is_mt_ckd_h2o_self_continuum(cia_conf):
-                source_ckd_296_path, source_ckd_260_path = mt_ckd_h2o_self_paths(cia_conf)
-                ensure_nonempty_file(source_ckd_296_path, f"MT_CKD H2O 296K self-continuum input file for {pair_name}")
-                ensure_nonempty_file(source_ckd_260_path, f"MT_CKD H2O 260K self-continuum input file for {pair_name}")
+                source_ckd_path, source_ckd_duplicate_path = mt_ckd_h2o_self_paths(cia_conf)
+                ensure_nonempty_file(source_ckd_path, f"MT_CKD H2O self-continuum input file for {pair_name}")
                 continuum_source_files[pair_name] = {
-                    's296': source_ckd_296_path,
-                    's260': source_ckd_260_path,
+                    'source': source_ckd_path,
+                    'source_duplicate': source_ckd_duplicate_path,
                 }
             else:
                 source_cia_path = os.path.join(root, cia_conf['cia_rel_path'], cia_conf['cia_file'])
@@ -1443,12 +1438,15 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
         full_cia_out_path = f"{root}/block19/{cia_out_base}"
         monitoring_cia_path = f"{root}/block19/{monitor_prefix}_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}"
         lbl_cia_path = f"{root}/block19/{lbl_prefix}_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}.nc"
+        mt_ckd_map_path = f"{monitoring_cia_path}_map.nc"
 
         generated_cia_files.append(full_cia_out_path)
 
         remove_if_exists(full_cia_out_path)
         remove_if_exists(full_cia_out_path + '.nc')
         remove_if_exists(monitoring_cia_path)
+        remove_if_exists(monitoring_cia_path + '.nc')
+        remove_if_exists(mt_ckd_map_path)
         remove_if_exists(lbl_cia_path)
 
         exec_prefix = "corr_k_MTC" if is_mt_ckd_h2o_self_continuum(cia_conf) else "corr_k_CIA"
@@ -1459,17 +1457,16 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
             if is_mt_ckd_h2o_self_continuum(cia_conf):
                 source_ckd_paths = continuum_source_files[pair_name]
                 max_path = float(cia_conf.get('max_path', 1000.0))
-                nu_cutoff = float(cia_conf.get('nu_cutoff', 2500.0))
                 line_inc = float(cia_conf.get('line_inc', 1.0))
                 fit_type = str(cia_conf.get('fit_type', 'b'))
                 fit_tol = float(cia_conf.get('fit_tol', 1.0e-3))
-                nproc = int(cia_conf.get('nproc', 30))
-                lbl_map_path = gas_id_to_lbl_map_path.get(id1)
-                if not lbl_map_path:
-                    raise ValueError(f"Missing line absorption map path for MT_CKD gas id {id1}")
-                use_lbl_map = os.path.exists(lbl_map_path) and os.path.getsize(lbl_map_path) > 0
-                if not use_lbl_map and not BLOCK19_ONLY_TEST:
-                    ensure_nonempty_file(lbl_map_path, f"MT_CKD line absorption map for {pair_name}")
+                nproc = int(cia_conf.get('nproc', 1))
+                lbl_map_path = cia_conf.get('line_map_path') or gas_id_to_lbl_map_path.get(id1)
+                use_lbl_map = bool(cia_conf.get('use_line_map', False))
+                if use_lbl_map:
+                    if not lbl_map_path:
+                        raise ValueError(f"Missing line absorption map path for MT_CKD gas id {id1}")
+                    ensure_netcdf_file(lbl_map_path, f"MT_CKD line absorption map for {pair_name}")
                 fit_flag = {
                     'n': '-n 10',
                     't': f'-t {fit_tol}',
@@ -1480,11 +1477,10 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
                 f.write('set -e\n')
                 f.write(f'Ccorr_k -F {pt_cia_path} ')
                 f.write(f'-R {band_start} {band_end} ')
-                f.write(f'-c {nu_cutoff:.3f} ')
                 f.write(f'-i {line_inc:.3f} ')
                 f.write(f'-ct {id1} {id2} {max_path:.3e} ')
                 f.write(f'{fit_flag} ')
-                f.write(f'-e {source_ckd_paths["s296"]} {source_ckd_paths["s260"]} ')
+                f.write(f'-e {source_ckd_paths["source"]} {source_ckd_paths["source_duplicate"]} ')
             else:
                 regridded_cia_path = cia_regridded_files[pair_name]
                 max_path = float(cia_conf.get('max_path', 1000.0))
@@ -1505,14 +1501,11 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
                     f.write(f'-lm {lbl_map_path} ')
                 else:
                     print(
-                        f"[MT_CKD] No line absorption map found for {pair_name}: {lbl_map_path}; "
-                        "omitting -lm for this block19-only run."
+                        f"[MT_CKD] No explicit line absorption map requested for {pair_name}; "
+                        "omitting -lm."
                     )
-                print(
-                    f"[MT_CKD] Omitting -L mapping output for {pair_name}; "
-                    "this SOCRATES build can stop while writing the MT_CKD netCDF map, "
-                    "and the block19 k-table text output does not need it."
-                )
+                f.write(f'-L {monitoring_cia_path}.nc ')
+                f.write(f'-sm {mt_ckd_map_path} ')
                 f.write(f'-np {nproc}')
             elif write_lbl_for_continuum:
                 f.write(f'-L {lbl_cia_path}')
