@@ -44,4 +44,5 @@ util/backup
 *codex*
 out/
 job_BASE.slurm
-.portal
+.portal/*
+job_BASE.slurm
