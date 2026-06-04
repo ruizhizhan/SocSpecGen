@@ -295,7 +295,6 @@ CIA_LIBRARY = {
         'line_inc': 1.0,
         'fit_type': 'b',
         'fit_tol': 1.0e-3,
-        'nproc': 1,
     }
     # parse_cia.py
 }

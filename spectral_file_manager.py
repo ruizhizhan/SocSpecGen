@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import stat
+import copy
 from typing import Literal, List, Dict, Tuple, Set, Optional
 
 # Import configuration
@@ -313,10 +314,150 @@ def validate_cia_config(pair_name: str, cia_conf: Dict) -> None:
     if missing:
         raise ValueError(f"Continuum pair {pair_name} is missing required field(s): {missing}")
 
+STRICT_EDGE_ROUND_THRESHOLD = 20000.0
+STRICT_EDGE_ROUND_STEP = 100.0
+EDGE_TOLERANCE = 1.0e-8
+
+
+def normalize_strict_band_edge(value: float, side: Literal['lower', 'upper']) -> float:
+    """
+    Round high-wavenumber data limits onto a coarser 100 cm-1 grid.
+
+    The rounding is outward so the configured data range remains covered after
+    strict band splitting. Below 20000 cm-1 the native boundary is preserved.
+    """
+    edge = float(value)
+    if edge <= STRICT_EDGE_ROUND_THRESHOLD:
+        return edge
+
+    scaled = edge / STRICT_EDGE_ROUND_STEP
+    if side == 'lower':
+        return float(np.floor(scaled + EDGE_TOLERANCE) * STRICT_EDGE_ROUND_STEP)
+    return float(np.ceil(scaled - EDGE_TOLERANCE) * STRICT_EDGE_ROUND_STEP)
+
+
+def normalize_strict_range(lower: float, upper: float) -> Tuple[float, float]:
+    norm_lower = normalize_strict_band_edge(lower, 'lower')
+    norm_upper = normalize_strict_band_edge(upper, 'upper')
+    if norm_lower >= norm_upper:
+        raise ValueError(
+            f"Invalid strict band range after normalization: "
+            f"{lower}-{upper} -> {norm_lower}-{norm_upper}"
+        )
+    return norm_lower, norm_upper
+
+
+def iter_gas_data_ranges(gas_conf: Dict, include_uv: bool = True):
+    gas_abs_config = gas_conf.get('gas_abs_config')
+    if gas_abs_config:
+        yield 'gas_abs_config', gas_abs_config, 'lower_wn', 'upper_wn'
+
+    uv_config = gas_conf.get('uv_config')
+    if include_uv and uv_config:
+        yield 'uv_config', uv_config, 'lower_wn', 'upper_wn'
+
+
+def normalize_gas_configs_for_strict_edges(
+    gas_configs: List[Dict],
+    include_uv: bool,
+    strict_band_edges: bool,
+) -> List[Dict]:
+    """
+    Return worker configs whose ranges match strict edge normalization.
+
+    Ccorr_k later calls find_index(..., strict_band_edges=True). If we split
+    WNEDGES on normalized limits but still pass the raw limits to find_index,
+    the newly split edge can still be rejected. Keeping the worker configs in
+    sync avoids that mismatch.
+    """
+    normalized_configs = copy.deepcopy(gas_configs)
+    if not strict_band_edges:
+        return normalized_configs
+
+    for gas_conf in normalized_configs:
+        for _, range_conf, lower_key, upper_key in iter_gas_data_ranges(gas_conf, include_uv=include_uv):
+            lower = range_conf.get(lower_key)
+            upper = range_conf.get(upper_key)
+            if lower is None or upper is None:
+                continue
+            norm_lower, norm_upper = normalize_strict_range(float(lower), float(upper))
+            range_conf[lower_key] = norm_lower
+            range_conf[upper_key] = norm_upper
+
+    return normalized_configs
+
+
+def adjust_wnedges_for_strict_gas_ranges(
+    wnedges: np.ndarray,
+    gas_configs: List[Dict],
+    include_uv: bool,
+    strict_band_edges: bool,
+) -> np.ndarray:
+    """
+    Insert gas data boundaries into WNEDGES before strict corr-k generation.
+
+    This prevents a band from crossing a data-library boundary while BLOCK 4
+    still declares that gas as active. High-wavenumber boundaries are first
+    rounded outward to 100 cm-1 to avoid creating very narrow bands.
+    """
+    base_edges = np.asarray(wnedges, dtype=float)
+    if not strict_band_edges:
+        return base_edges
+
+    extra_edges: List[float] = []
+    adjustment_report = []
+    grid_min = float(base_edges[0])
+    grid_max = float(base_edges[-1])
+
+    for gas_conf in gas_configs:
+        label = gas_conf.get('molecule') or gas_conf.get('gas_id') or 'gas'
+        for range_name, range_conf, lower_key, upper_key in iter_gas_data_ranges(gas_conf, include_uv=include_uv):
+            lower = range_conf.get(lower_key)
+            upper = range_conf.get(upper_key)
+            if lower is None or upper is None:
+                continue
+
+            raw_lower = float(lower)
+            raw_upper = float(upper)
+            norm_lower, norm_upper = normalize_strict_range(raw_lower, raw_upper)
+            if (abs(norm_lower - raw_lower) > EDGE_TOLERANCE or
+                    abs(norm_upper - raw_upper) > EDGE_TOLERANCE):
+                adjustment_report.append(
+                    f"{label} {range_name}: {raw_lower:g}-{raw_upper:g} -> "
+                    f"{norm_lower:g}-{norm_upper:g}"
+                )
+
+            for edge in (norm_lower, norm_upper):
+                if grid_min + EDGE_TOLERANCE < edge < grid_max - EDGE_TOLERANCE:
+                    extra_edges.append(edge)
+
+    if not extra_edges:
+        return base_edges
+
+    adjusted_edges = np.unique(np.round(np.concatenate([base_edges, np.asarray(extra_edges)]), 10))
+    adjusted_edges.sort()
+
+    if len(adjusted_edges) != len(base_edges):
+        print("\n" + "=" * 40)
+        print(" STRICT BAND EDGE ADJUSTMENT")
+        print("=" * 40)
+        print(
+            f"Inserted {len(adjusted_edges) - len(base_edges)} gas boundary edge(s): "
+            f"{len(base_edges) - 1} -> {len(adjusted_edges) - 1} bands"
+        )
+        for message in adjustment_report:
+            print(f"  {message}")
+        print("=" * 40 + "\n")
+
+    return adjusted_edges
+
+
 def calculate_band_occupancy(
     wnedges: np.ndarray, 
     selected_gases: List[str], 
-    include_uv: bool = True  
+    include_uv: bool = True,
+    strict_band_edges: bool = False,
+    gas_configs_by_name: Optional[Dict[str, Dict]] = None,
 ) -> Tuple[List[List[str]], Dict[str, List[int]], List[int]]:
     """
     Determines which gases are present in each spectral band for BLOCK 4 only.
@@ -325,7 +466,7 @@ def calculate_band_occupancy(
     """
     band_map = []
     num_bands = len(wnedges) - 1
-    gas_configs = {name: cfg.GAS_LIBRARY[name] for name in selected_gases}
+    gas_configs = gas_configs_by_name or {name: cfg.GAS_LIBRARY[name] for name in selected_gases}
     
     # New: Dictionary to track missing bands for each gas
     missing_bands_report = {name: [] for name in selected_gases}
@@ -340,16 +481,23 @@ def calculate_band_occupancy(
             gas_conf = gas_configs[gas_name]
             gas_id = gas_conf['gas_id']
             ranges_to_check = []
-            
-            if gas_conf.get('gas_abs_config'):
-                ranges_to_check.append((gas_conf['gas_abs_config']['lower_wn'], gas_conf['gas_abs_config']['upper_wn']))
-            
-            # check if uv included
-            if include_uv and gas_conf.get('uv_config'):
-                ranges_to_check.append((gas_conf['uv_config']['lower_wn'], gas_conf['uv_config']['upper_wn']))
+            for _, range_conf, lower_key, upper_key in iter_gas_data_ranges(gas_conf, include_uv=include_uv):
+                r_min = float(range_conf[lower_key])
+                r_max = float(range_conf[upper_key])
+                if strict_band_edges:
+                    r_min, r_max = normalize_strict_range(r_min, r_max)
+                ranges_to_check.append((r_min, r_max))
             
             for r_min, r_max in ranges_to_check:
-                if max(band_min, r_min) < min(band_max, r_max):
+                if strict_band_edges:
+                    band_is_supported = (
+                        band_min >= r_min - EDGE_TOLERANCE and
+                        band_max <= r_max + EDGE_TOLERANCE
+                    )
+                else:
+                    band_is_supported = max(band_min, r_min) < min(band_max, r_max)
+
+                if band_is_supported:
                     current_band_gas_ids.add(gas_id)
                     break 
 
@@ -431,7 +579,7 @@ def get_solar_wn_range(file_path: str) -> Tuple[float, float]:
 # ==========================================
 
 # Changed: Added job_dir parameter
-def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_type: Literal['lw','sw']):
+def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_type: Literal['lw','sw'], slurm_cpu_count: int):
     """
     Writes a Python script dynamically configured with injected logic and data.
     """
@@ -445,6 +593,7 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
     write_qa_summary_enabled = getattr(cfg, 'WRITE_QA_SUMMARY', True)
     cia_t_grid_policy = getattr(cfg, 'CIA_T_GRID_POLICY', 'native')
     cia_shared_t_grid = getattr(cfg, 'CIA_SHARED_T_GRID', None)
+    strict_band_edges = getattr(cfg, 'STRICT_BAND_EDGES', True)
     
     candidate_cia_tuples = get_active_cias(selected_gases_list)
     active_cia_tuples = candidate_cia_tuples if cfg.INCLUDE_CIA else []
@@ -480,6 +629,11 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
     else:
         print(f"[{spec_type}] CIA generation disabled by config for {test_name}.")
 
+    if spec_type == 'sw' or cfg.ULTRA_HOT_ATMOSPHERE:
+        include_uv = True
+    else:
+        include_uv = False
+
     # --- Wavenumber Logic (Modified) ---
     target_wnedges = cfg.WNEDGES # Default to full edges
     
@@ -509,6 +663,22 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
         except Exception as e:
             print(f"Error reading solar file: {e}. Using full WNEDGES.")
 
+    target_wnedges = adjust_wnedges_for_strict_gas_ranges(
+        target_wnedges,
+        current_gas_configs,
+        include_uv=include_uv,
+        strict_band_edges=strict_band_edges,
+    )
+    current_gas_configs = normalize_gas_configs_for_strict_edges(
+        current_gas_configs,
+        include_uv=include_uv,
+        strict_band_edges=strict_band_edges,
+    )
+    gas_configs_by_name = {
+        name: config
+        for name, config in zip(selected_gases_list, current_gas_configs)
+    }
+
     cia_band_coverage, bands_with_cia, _cia_required_gases_by_band = analyze_cia_band_coverage(
         target_wnedges,
         active_cia_tuples,
@@ -522,14 +692,12 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
 
     # Calculate BLOCK 4 band occupancy using the TARGET edges.
     # CIA is excluded here on purpose; it is handled separately in BLOCK 18/19.
-    if spec_type == 'sw' or cfg.ULTRA_HOT_ATMOSPHERE:
-        include_uv = True
-    else:
-        include_uv = False
     band_gas_map, missing_gas_bands, empty_band_numbers = calculate_band_occupancy(
         target_wnedges,
         selected_gases_list,
         include_uv=include_uv,
+        strict_band_edges=strict_band_edges,
+        gas_configs_by_name=gas_configs_by_name,
     )
     
     with open(file_path, 'w') as f:
@@ -557,6 +725,7 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
         f.write(f"star_name = '{cfg.STAR_NAME}'\n")
         f.write(f"root = '{cfg.ROOT_DIR}'\n")
         f.write(f"num_kterm = {cfg.NUM_KTERM}\n")
+        f.write(f"corrk_nproc = {int(slurm_cpu_count)}\n")
         f.write(f"update_library = {update_library}\n")
         f.write(f"write_qa_summary_enabled = {write_qa_summary_enabled}\n")
         f.write(f"cia_t_grid_policy = '{cia_t_grid_policy}'\n")
@@ -565,6 +734,7 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
         f.write(f"include_cia = {cfg.INCLUDE_CIA}\n")
         f.write(f"include_solar_sed = {cfg.INCLUDE_SOLAR_SED}\n")
         f.write(f"ultra_hot_atmosphere = {cfg.ULTRA_HOT_ATMOSPHERE}\n")
+        f.write(f"strict_band_edges = {strict_band_edges}\n")
         # add solar path
         f.write(f"solar_path = os.path.join(root, 'stellar_spectra', 'soc_in', '{cfg.STAR_NAME}')\n\n")
         
@@ -691,11 +861,16 @@ def is_mt_ckd_h2o_self_continuum(cia_conf):
 
 
 def mt_ckd_h2o_self_paths(cia_conf):
-    ckd_rel_path = cia_conf.get('ckd_rel_path')
-    if not ckd_rel_path:
-        raise ValueError("MT_CKD H2O self continuum requires ckd_rel_path")
-    ckd_path = os.path.join(root, ckd_rel_path)
-    return ckd_path, ckd_path
+    ckd_296_rel_path = cia_conf.get('ckd_296_rel_path')
+    ckd_260_rel_path = cia_conf.get('ckd_260_rel_path')
+    if ckd_296_rel_path or ckd_260_rel_path:
+        if not ckd_296_rel_path or not ckd_260_rel_path:
+            raise ValueError("MT_CKD H2O self continuum requires both ckd_296_rel_path and ckd_260_rel_path")
+    else:
+        base_dir = os.path.dirname(cia_conf.get('ckd_rel_path', 'hitran/H2O-H2O_v4.3/absco-ref_wv-mt-ckd.nc'))
+        ckd_296_rel_path = os.path.join(base_dir, 'mt_ckd4p3_s296')
+        ckd_260_rel_path = os.path.join(base_dir, 'mt_ckd4p3_s260')
+    return os.path.join(root, ckd_296_rel_path), os.path.join(root, ckd_260_rel_path)
 
 
 def run_generated_script(script_path, description):
@@ -1347,7 +1522,7 @@ for config, output_path, mon_path, LbL_path in zip(GAS_CONFIGS, output_path_list
     remove_if_exists(exec_file_corrk)
 
     with open(exec_file_corrk, "w", encoding='utf-8') as f:
-        idx_lower, idx_upper = find_index(wnedges[:-1], wnedges[1:], lower, upper, strict_band_edges=True)
+        idx_lower, idx_upper = find_index(wnedges[:-1], wnedges[1:], lower, upper, strict_band_edges=strict_band_edges)
         f.write('Ccorr_k ')
         f.write(f'-s {skeleton_file_name} ')
         f.write(f'-R {idx_lower} {idx_upper} ')
@@ -1363,7 +1538,7 @@ for config, output_path, mon_path, LbL_path in zip(GAS_CONFIGS, output_path_list
         f.write(f'-o {output_path} ')
         f.write(f'-m {mon_path} ')
         f.write(f'-L {LbL_path} ')
-        f.write('-np 1\n')
+        f.write(f'-np {corrk_nproc}\n')
 
     os.chmod(exec_file_corrk, 0o777)
     run_generated_script(exec_file_corrk, f'gas corr_k generation for {gas_id}')
@@ -1389,11 +1564,12 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
             P_cia_grid = np.array(cia_conf.get('p_grid', [1.0]), dtype=float)
 
             if is_mt_ckd_h2o_self_continuum(cia_conf):
-                source_ckd_path, source_ckd_duplicate_path = mt_ckd_h2o_self_paths(cia_conf)
-                ensure_nonempty_file(source_ckd_path, f"MT_CKD H2O self-continuum input file for {pair_name}")
+                source_ckd_296_path, source_ckd_260_path = mt_ckd_h2o_self_paths(cia_conf)
+                ensure_nonempty_file(source_ckd_296_path, f"MT_CKD H2O 296K self-continuum input file for {pair_name}")
+                ensure_nonempty_file(source_ckd_260_path, f"MT_CKD H2O 260K self-continuum input file for {pair_name}")
                 continuum_source_files[pair_name] = {
-                    'source': source_ckd_path,
-                    'source_duplicate': source_ckd_duplicate_path,
+                    's296': source_ckd_296_path,
+                    's260': source_ckd_260_path,
                 }
             else:
                 source_cia_path = os.path.join(root, cia_conf['cia_rel_path'], cia_conf['cia_file'])
@@ -1438,15 +1614,12 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
         full_cia_out_path = f"{root}/block19/{cia_out_base}"
         monitoring_cia_path = f"{root}/block19/{monitor_prefix}_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}"
         lbl_cia_path = f"{root}/block19/{lbl_prefix}_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}.nc"
-        mt_ckd_map_path = f"{monitoring_cia_path}_map.nc"
 
         generated_cia_files.append(full_cia_out_path)
 
         remove_if_exists(full_cia_out_path)
         remove_if_exists(full_cia_out_path + '.nc')
         remove_if_exists(monitoring_cia_path)
-        remove_if_exists(monitoring_cia_path + '.nc')
-        remove_if_exists(mt_ckd_map_path)
         remove_if_exists(lbl_cia_path)
 
         exec_prefix = "corr_k_MTC" if is_mt_ckd_h2o_self_continuum(cia_conf) else "corr_k_CIA"
@@ -1457,10 +1630,10 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
             if is_mt_ckd_h2o_self_continuum(cia_conf):
                 source_ckd_paths = continuum_source_files[pair_name]
                 max_path = float(cia_conf.get('max_path', 1000.0))
+                nu_cutoff = float(cia_conf.get('nu_cutoff', 2500.0))
                 line_inc = float(cia_conf.get('line_inc', 1.0))
                 fit_type = str(cia_conf.get('fit_type', 'b'))
                 fit_tol = float(cia_conf.get('fit_tol', 1.0e-3))
-                nproc = int(cia_conf.get('nproc', 1))
                 lbl_map_path = cia_conf.get('line_map_path') or gas_id_to_lbl_map_path.get(id1)
                 use_lbl_map = bool(cia_conf.get('use_line_map', False))
                 if use_lbl_map:
@@ -1477,10 +1650,11 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
                 f.write('set -e\n')
                 f.write(f'Ccorr_k -F {pt_cia_path} ')
                 f.write(f'-R {band_start} {band_end} ')
+                f.write(f'-c {nu_cutoff:.3f} ')
                 f.write(f'-i {line_inc:.3f} ')
                 f.write(f'-ct {id1} {id2} {max_path:.3e} ')
                 f.write(f'{fit_flag} ')
-                f.write(f'-e {source_ckd_paths["source"]} {source_ckd_paths["source_duplicate"]} ')
+                f.write(f'-e {source_ckd_paths["s296"]} {source_ckd_paths["s260"]} ')
             else:
                 regridded_cia_path = cia_regridded_files[pair_name]
                 max_path = float(cia_conf.get('max_path', 1000.0))
@@ -1504,11 +1678,17 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
                         f"[MT_CKD] No explicit line absorption map requested for {pair_name}; "
                         "omitting -lm."
                     )
-                f.write(f'-L {monitoring_cia_path}.nc ')
-                f.write(f'-sm {mt_ckd_map_path} ')
-                f.write(f'-np {nproc}')
+                print(
+                    f"[MT_CKD] Omitting -L mapping output for {pair_name}; "
+                    "this SOCRATES build can stop while writing the MT_CKD netCDF map, "
+                    "and the block19 k-table text output does not need it."
+                )
+                f.write(f'-np {corrk_nproc}')
             elif write_lbl_for_continuum:
                 f.write(f'-L {lbl_cia_path}')
+                f.write(f' -np {corrk_nproc}')
+            else:
+                f.write(f'-np {corrk_nproc}')
             f.write('\n')
 
         os.chmod(exec_file_CIA_run, 0o777)
@@ -1575,7 +1755,7 @@ if spec_type == 'sw' or ultra_hot_atmosphere:
         with open(exec_file_corrk_xuv, "w", encoding='utf-8') as f:
             f.write(f'Ccorr_k -s {skeleton_file_name} ')
             f.write(f'-UVX {uv_source_path} ')
-            idx_lower, idx_upper = find_index(wnedges[:-1], wnedges[1:], lower, upper)
+            idx_lower, idx_upper = find_index(wnedges[:-1], wnedges[1:], lower, upper, strict_band_edges=strict_band_edges)
             f.write(f'-R {idx_lower} {idx_upper} ')
             f.write(f'-F {pt_uv_path} ')
             f.write('-i 1.0 ')
@@ -1585,7 +1765,7 @@ if spec_type == 'sw' or ultra_hot_atmosphere:
                 f.write(f'+S {solar_path} ')
             else:
                 f.write('+p ')
-            f.write(f'-o {output_path_xuv} -m {mon_path_xuv} -L {LBL_path_xuv} -np 1\n')
+            f.write(f'-o {output_path_xuv} -m {mon_path_xuv} -L {LBL_path_xuv} -np {corrk_nproc}\n')
 
         os.chmod(exec_file_corrk_xuv, 0o777)
         run_generated_script(exec_file_corrk_xuv, f'UV corr_k generation for {Molecule_str}')
@@ -1612,6 +1792,10 @@ with open(exec_file_sp, "w", encoding='utf-8') as f:
         f.write(f'{solar_path}\n')
         f.write('C\n')
         f.write('A\n')
+        if len(gas_id_list) == 1:
+            # SOCRATES asks this for a single custom Rayleigh gas.
+            # Without it, the following block number is consumed as Y/N input.
+            f.write('y\n')
 
     f.write('5\n')
     f.write(f'{output_path_list[0]}\n')
@@ -1793,16 +1977,20 @@ def get_file_size_in_gb(file_path):
         print(f"Error: {e}")
         return None
 
-# Changed: Added job_dir parameter
-def write_slurm_script(job_dir, job_name, case_name_list, gas_lbl_file_list):
-    slurm_path = os.path.join(job_dir, f'{job_name}.sh')
+def calculate_slurm_cpu_count(gas_lbl_file_list):
     cache_size_gb = 0.0
     for gas_lbl_file in gas_lbl_file_list:
         full_path = os.path.join(cfg.ROOT_DIR, gas_lbl_file)
         size_gb = get_file_size_in_gb(full_path)
         cache_size_gb += size_gb if size_gb is not None else 0.0
     gb_per_core = 2 # Wuzhen cluster
-    ncores = int(np.ceil(cache_size_gb / gb_per_core))+1
+    return int(np.ceil(cache_size_gb / gb_per_core)) + 1
+
+# Changed: Added job_dir parameter
+def write_slurm_script(job_dir, job_name, case_name_list, gas_lbl_file_list, ncores=None):
+    slurm_path = os.path.join(job_dir, f'{job_name}.sh')
+    if ncores is None:
+        ncores = calculate_slurm_cpu_count(gas_lbl_file_list)
     with open(slurm_path, 'w') as f:
         f.write('#!/bin/bash\n')
         f.write(f'#SBATCH --job-name={job_name}\n')
@@ -1819,8 +2007,8 @@ def write_slurm_script(job_dir, job_name, case_name_list, gas_lbl_file_list):
         
         for case_name in case_name_list:
             f.write(f'# Processing Case: {case_name}\n')
-            f.write(f'python -u {case_name}_lw.py\n')
-            f.write(f'python -u {case_name}_sw.py\n')
+            f.write(f'$CONDA_PREFIX/bin/python -u {case_name}_lw.py\n')
+            f.write(f'$CONDA_PREFIX/bin/python -u {case_name}_sw.py\n')
 
 # ==========================================
 # 4. Main Execution Loop
@@ -1849,10 +2037,17 @@ if __name__ == "__main__":
     print(f"Generating scripts for: {test_name}")
     print(f"Selected Gases: {SELECTED_MOLECULES}")
     print(f"Output Directory: {job_dir}")
+
+    gas_lbl_file_list = []
+    for gas in SELECTED_MOLECULES:
+        gas_conf = cfg.GAS_LIBRARY[gas]
+        gas_lbl_file_list.append(gas_conf['gas_abs_config']['hdf5_rel_path'])
+    slurm_cpu_count = calculate_slurm_cpu_count(gas_lbl_file_list)
+    print(f"Using {slurm_cpu_count} CPUs for Slurm and Ccorr_k -np.")
     
     # Generate Python Worker Scripts
-    write_worker_script(job_dir, f"{job_identifier}_lw.py", test_name, SELECTED_MOLECULES, 'lw')
-    write_worker_script(job_dir, f"{job_identifier}_sw.py", test_name, SELECTED_MOLECULES, 'sw')
+    write_worker_script(job_dir, f"{job_identifier}_lw.py", test_name, SELECTED_MOLECULES, 'lw', slurm_cpu_count)
+    write_worker_script(job_dir, f"{job_identifier}_sw.py", test_name, SELECTED_MOLECULES, 'sw', slurm_cpu_count)
     
     # Optional legacy post-processing for CFC113 experiments.
     if 'H2O' in SELECTED_MOLECULES and getattr(cfg, 'ENABLE_H2O_TO_CFC113_POSTPROCESS', False):
@@ -1861,12 +2056,8 @@ if __name__ == "__main__":
         
     # Generate Slurm Submission Script
     case_name_list = [job_identifier]
-    gas_lbl_file_list = []
-    for gas in SELECTED_MOLECULES:
-        gas_conf = cfg.GAS_LIBRARY[gas]
-        gas_lbl_file_list.append(gas_conf['gas_abs_config']['hdf5_rel_path'])
         
-    write_slurm_script(job_dir, job_identifier, case_name_list, gas_lbl_file_list)
+    write_slurm_script(job_dir, job_identifier, case_name_list, gas_lbl_file_list, slurm_cpu_count)
     
     slurm_file = f'{job_identifier}.sh'
     os.chmod(os.path.join(job_dir, slurm_file), 0o755)
