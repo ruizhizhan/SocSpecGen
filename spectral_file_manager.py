@@ -1998,7 +1998,7 @@ def write_slurm_script(job_dir, job_name, case_name_list, gas_lbl_file_list, nco
         f.write(f'#SBATCH --error=error_%j.err\n')
         f.write(f'#SBATCH -N 1\n')
         f.write(f'#SBATCH -c {ncores}\n')
-        f.write(f'#SBATCH --partition=wzhcnormal\n\n')
+        f.write(f'#SBATCH --partition=wzhctdnormal\n\n')
         
         # Changed: switch into the specific job_identifier directory
         f.write(f'cd {job_dir}\n')
