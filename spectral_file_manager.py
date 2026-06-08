@@ -87,20 +87,37 @@ def resolve_cia_t_grids(
         raise ValueError(f"Unsupported CIA_T_GRID_POLICY: {policy}")
 
     if policy == 'shared':
-        if shared_t_grid is None:
-            raise ValueError("CIA_SHARED_T_GRID must be set when CIA_T_GRID_POLICY='shared'")
-        shared_grid = [float(value) for value in np.asarray(shared_t_grid, dtype=float).tolist()]
-        if len(shared_grid) < 2:
-            raise ValueError(
-                "CIA_SHARED_T_GRID must contain at least two temperatures. "
-                f"Got: {shared_grid}"
-            )
-
+        native_grids_by_pair: Dict[str, List[float]] = {}
         for _, _, pair_name in active_cia_tuples:
             cia_conf = cia_configs.get(pair_name)
             if cia_conf is None or 't_grid' not in cia_conf:
                 raise ValueError(f"No t_grid found for CIA pair: {pair_name}")
-            native_grid = [float(value) for value in np.asarray(cia_conf['t_grid'], dtype=float).tolist()]
+            native_grids_by_pair[pair_name] = [
+                float(value) for value in np.asarray(cia_conf['t_grid'], dtype=float).tolist()
+            ]
+
+        shared_grid: Optional[List[float]] = None
+        for native_grid in native_grids_by_pair.values():
+            native_values = set(native_grid)
+            if shared_grid is None:
+                shared_grid = sorted(native_values)
+            else:
+                shared_grid = sorted(set(shared_grid).intersection(native_values))
+
+        if shared_grid is None or len(shared_grid) < 2:
+            shared_grid = (
+                [293.0, 296.0]
+                if shared_t_grid is None
+                else [float(value) for value in np.asarray(shared_t_grid, dtype=float).tolist()]
+            )
+        if len(shared_grid) < 2:
+            raise ValueError(
+                "CIA_SHARED_T_GRID fallback must contain at least two temperatures. "
+                f"Got: {shared_grid}"
+            )
+
+        for _, _, pair_name in active_cia_tuples:
+            native_grid = native_grids_by_pair[pair_name]
             grid_override = forced_by_pair.get(pair_name)
             grid = shared_grid if grid_override is None else [float(value) for value in np.asarray(grid_override, dtype=float).tolist()]
             if len(grid) < 2:
@@ -303,11 +320,7 @@ def validate_cia_config(pair_name: str, cia_conf: Dict) -> None:
     if kind == 'hitran_cia':
         missing = [key for key in ('cia_rel_path', 'cia_file') if key not in cia_conf]
     elif kind == 'mt_ckd_h2o_self':
-        has_explicit_tables = all(
-            key in cia_conf for key in ('ckd_296_rel_path', 'ckd_260_rel_path')
-        )
-        has_base_path = 'ckd_rel_path' in cia_conf
-        missing = [] if (has_explicit_tables or has_base_path) else ['ckd_rel_path']
+        missing = [key for key in ('ckd_rel_path',) if key not in cia_conf]
     else:
         raise ValueError(f"Unsupported continuum_kind for {pair_name}: {kind}")
 
@@ -476,7 +489,7 @@ def calculate_band_occupancy(
         band_max = wnedges[i+1]
         current_band_gas_ids: Set[str] = set()
         
-        # 1. Check Standard Absorption and UV
+        # 1. Check standard line absorption and UV by overlap only.
         for gas_name in selected_gases:
             gas_conf = gas_configs[gas_name]
             gas_id = gas_conf['gas_id']
@@ -484,20 +497,10 @@ def calculate_band_occupancy(
             for _, range_conf, lower_key, upper_key in iter_gas_data_ranges(gas_conf, include_uv=include_uv):
                 r_min = float(range_conf[lower_key])
                 r_max = float(range_conf[upper_key])
-                if strict_band_edges:
-                    r_min, r_max = normalize_strict_range(r_min, r_max)
                 ranges_to_check.append((r_min, r_max))
             
             for r_min, r_max in ranges_to_check:
-                if strict_band_edges:
-                    band_is_supported = (
-                        band_min >= r_min - EDGE_TOLERANCE and
-                        band_max <= r_max + EDGE_TOLERANCE
-                    )
-                else:
-                    band_is_supported = max(band_min, r_min) < min(band_max, r_max)
-
-                if band_is_supported:
+                if max(band_min, r_min) < min(band_max, r_max):
                     current_band_gas_ids.add(gas_id)
                     break 
 
@@ -594,6 +597,7 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
     cia_t_grid_policy = getattr(cfg, 'CIA_T_GRID_POLICY', 'native')
     cia_shared_t_grid = getattr(cfg, 'CIA_SHARED_T_GRID', None)
     strict_band_edges = getattr(cfg, 'STRICT_BAND_EDGES', True)
+    strict_band_fill_value = getattr(cfg, 'STRICT_BAND_FILL_VALUE', 1.0e-45)
     
     candidate_cia_tuples = get_active_cias(selected_gases_list)
     active_cia_tuples = candidate_cia_tuples if cfg.INCLUDE_CIA else []
@@ -663,17 +667,6 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
         except Exception as e:
             print(f"Error reading solar file: {e}. Using full WNEDGES.")
 
-    target_wnedges = adjust_wnedges_for_strict_gas_ranges(
-        target_wnedges,
-        current_gas_configs,
-        include_uv=include_uv,
-        strict_band_edges=strict_band_edges,
-    )
-    current_gas_configs = normalize_gas_configs_for_strict_edges(
-        current_gas_configs,
-        include_uv=include_uv,
-        strict_band_edges=strict_band_edges,
-    )
     gas_configs_by_name = {
         name: config
         for name, config in zip(selected_gases_list, current_gas_configs)
@@ -714,7 +707,7 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
         f.write("from typing import Literal\n")
         f.write("import sys\n")
         f.write(f"sys.path.append('{cfg.ROOT_DIR}')\n") 
-        f.write("from util.tools import read_wnedges, generate_LBL_from_ExoMol_hdf5, find_index, fix_socrates_nan, check_absorption_mismatches\n\n")
+        f.write("from util.tools import read_wnedges, generate_LBL_from_ExoMol_hdf5, find_index, fix_socrates_nan, check_absorption_mismatches, create_strict_band_lbl_cache\n\n")
 
         # --- Dynamic Configuration Injection ---
         f.write(f"# --- Configuration injected by Manager ---\n")
@@ -725,7 +718,8 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
         f.write(f"star_name = '{cfg.STAR_NAME}'\n")
         f.write(f"root = '{cfg.ROOT_DIR}'\n")
         f.write(f"num_kterm = {cfg.NUM_KTERM}\n")
-        f.write(f"corrk_nproc = {int(slurm_cpu_count)}\n")
+        f.write(f"slurm_cpu_count = {int(slurm_cpu_count)}\n")
+        f.write("corrk_nproc = int(os.environ.get('SLURM_CPUS_PER_TASK') or slurm_cpu_count)\n")
         f.write(f"update_library = {update_library}\n")
         f.write(f"write_qa_summary_enabled = {write_qa_summary_enabled}\n")
         f.write(f"cia_t_grid_policy = '{cia_t_grid_policy}'\n")
@@ -735,6 +729,7 @@ def write_worker_script(job_dir, filename, test_name, selected_gases_list, spec_
         f.write(f"include_solar_sed = {cfg.INCLUDE_SOLAR_SED}\n")
         f.write(f"ultra_hot_atmosphere = {cfg.ULTRA_HOT_ATMOSPHERE}\n")
         f.write(f"strict_band_edges = {strict_band_edges}\n")
+        f.write(f"strict_band_fill_value = {strict_band_fill_value}\n")
         # add solar path
         f.write(f"solar_path = os.path.join(root, 'stellar_spectra', 'soc_in', '{cfg.STAR_NAME}')\n\n")
         
@@ -861,16 +856,10 @@ def is_mt_ckd_h2o_self_continuum(cia_conf):
 
 
 def mt_ckd_h2o_self_paths(cia_conf):
-    ckd_296_rel_path = cia_conf.get('ckd_296_rel_path')
-    ckd_260_rel_path = cia_conf.get('ckd_260_rel_path')
-    if ckd_296_rel_path or ckd_260_rel_path:
-        if not ckd_296_rel_path or not ckd_260_rel_path:
-            raise ValueError("MT_CKD H2O self continuum requires both ckd_296_rel_path and ckd_260_rel_path")
-    else:
-        base_dir = os.path.dirname(cia_conf.get('ckd_rel_path', 'hitran/H2O-H2O_v4.3/absco-ref_wv-mt-ckd.nc'))
-        ckd_296_rel_path = os.path.join(base_dir, 'mt_ckd4p3_s296')
-        ckd_260_rel_path = os.path.join(base_dir, 'mt_ckd4p3_s260')
-    return os.path.join(root, ckd_296_rel_path), os.path.join(root, ckd_260_rel_path)
+    ckd_rel_path = cia_conf.get('ckd_rel_path')
+    if not ckd_rel_path:
+        raise ValueError("MT_CKD H2O self continuum requires ckd_rel_path")
+    return os.path.join(root, ckd_rel_path), os.path.join(root, ckd_rel_path)
 
 
 def run_generated_script(script_path, description):
@@ -1522,7 +1511,35 @@ for config, output_path, mon_path, LbL_path in zip(GAS_CONFIGS, output_path_list
     remove_if_exists(exec_file_corrk)
 
     with open(exec_file_corrk, "w", encoding='utf-8') as f:
-        idx_lower, idx_upper = find_index(wnedges[:-1], wnedges[1:], lower, upper, strict_band_edges=strict_band_edges)
+        idx_lower, idx_upper = find_index(wnedges[:-1], wnedges[1:], lower, upper, strict_band_edges=False)
+        LbL_corrk_path = LbL_path
+        if strict_band_edges:
+            strict_cache_dir = os.path.join(root, 'block5', 'strict_band_cache')
+            cache_base = os.path.splitext(os.path.basename(LbL_path))[0]
+            LbL_corrk_path = os.path.join(
+                strict_cache_dir,
+                f'{cache_base}_bands{idx_lower}_{idx_upper}.nc'
+            )
+            target_lower_wn = float(wnedges[idx_lower - 1])
+            target_upper_wn = float(wnedges[idx_upper])
+            hdf5_path_for_fill = os.path.join(root, config['gas_abs_config']['hdf5_rel_path'])
+            with netCDF4.Dataset(hdf5_path_for_fill, 'r') as hdf5_for_fill:
+                mol_mass_values = np.asarray(hdf5_for_fill.variables['mol_mass'][:], dtype=float).reshape(-1)
+            if mol_mass_values.size != 1:
+                raise ValueError(f"Expected one mol_mass value in {hdf5_path_for_fill}, got {mol_mass_values.size}")
+            mol_mass = float(mol_mass_values[0])
+            if mol_mass <= 0.0:
+                raise ValueError(f"Invalid mol_mass in {hdf5_path_for_fill}: {mol_mass}")
+            hdf5_to_kabs_factor = 6.0221408e23 / (10.0 * mol_mass)
+            strict_band_kabs_fill_value = strict_band_fill_value * hdf5_to_kabs_factor
+            create_strict_band_lbl_cache(
+                LbL_path,
+                LbL_corrk_path,
+                target_lower_wn,
+                target_upper_wn,
+                fill_value=strict_band_kabs_fill_value,
+            )
+            ensure_nonempty_file(LbL_corrk_path, f'strict-band LBL cache for gas {gas_id}')
         f.write('Ccorr_k ')
         f.write(f'-s {skeleton_file_name} ')
         f.write(f'-R {idx_lower} {idx_upper} ')
@@ -1537,7 +1554,7 @@ for config, output_path, mon_path, LbL_path in zip(GAS_CONFIGS, output_path_list
             f.write('+p ')
         f.write(f'-o {output_path} ')
         f.write(f'-m {mon_path} ')
-        f.write(f'-L {LbL_path} ')
+        f.write(f'-L {LbL_corrk_path} ')
         f.write(f'-np {corrk_nproc}\n')
 
     os.chmod(exec_file_corrk, 0o777)
@@ -1614,6 +1631,8 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
         full_cia_out_path = f"{root}/block19/{cia_out_base}"
         monitoring_cia_path = f"{root}/block19/{monitor_prefix}_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}"
         lbl_cia_path = f"{root}/block19/{lbl_prefix}_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}.nc"
+        mtc_lbl_path = f"{monitoring_cia_path}.nc"
+        mtc_map_path = f"{monitoring_cia_path}_map.nc"
 
         generated_cia_files.append(full_cia_out_path)
 
@@ -1621,6 +1640,9 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
         remove_if_exists(full_cia_out_path + '.nc')
         remove_if_exists(monitoring_cia_path)
         remove_if_exists(lbl_cia_path)
+        if is_mt_ckd_h2o_self_continuum(cia_conf):
+            remove_if_exists(mtc_lbl_path)
+            remove_if_exists(mtc_map_path)
 
         exec_prefix = "corr_k_MTC" if is_mt_ckd_h2o_self_continuum(cia_conf) else "corr_k_CIA"
         exec_file_CIA_run = f"{exec_prefix}_{pair_name}_{test_name}_run{run_index}_bands{band_start}_{band_end}.sh"
@@ -1630,16 +1652,9 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
             if is_mt_ckd_h2o_self_continuum(cia_conf):
                 source_ckd_paths = continuum_source_files[pair_name]
                 max_path = float(cia_conf.get('max_path', 1000.0))
-                nu_cutoff = float(cia_conf.get('nu_cutoff', 2500.0))
                 line_inc = float(cia_conf.get('line_inc', 1.0))
                 fit_type = str(cia_conf.get('fit_type', 'b'))
                 fit_tol = float(cia_conf.get('fit_tol', 1.0e-3))
-                lbl_map_path = cia_conf.get('line_map_path') or gas_id_to_lbl_map_path.get(id1)
-                use_lbl_map = bool(cia_conf.get('use_line_map', False))
-                if use_lbl_map:
-                    if not lbl_map_path:
-                        raise ValueError(f"Missing line absorption map path for MT_CKD gas id {id1}")
-                    ensure_netcdf_file(lbl_map_path, f"MT_CKD line absorption map for {pair_name}")
                 fit_flag = {
                     'n': '-n 10',
                     't': f'-t {fit_tol}',
@@ -1650,7 +1665,6 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
                 f.write('set -e\n')
                 f.write(f'Ccorr_k -F {pt_cia_path} ')
                 f.write(f'-R {band_start} {band_end} ')
-                f.write(f'-c {nu_cutoff:.3f} ')
                 f.write(f'-i {line_inc:.3f} ')
                 f.write(f'-ct {id1} {id2} {max_path:.3e} ')
                 f.write(f'{fit_flag} ')
@@ -1671,18 +1685,8 @@ if include_cia and len(ACTIVE_CIA_TUPLES) > 0:
             f.write(f'-o {full_cia_out_path} ')
             f.write(f'-m {monitoring_cia_path} ')
             if is_mt_ckd_h2o_self_continuum(cia_conf):
-                if use_lbl_map:
-                    f.write(f'-lm {lbl_map_path} ')
-                else:
-                    print(
-                        f"[MT_CKD] No explicit line absorption map requested for {pair_name}; "
-                        "omitting -lm."
-                    )
-                print(
-                    f"[MT_CKD] Omitting -L mapping output for {pair_name}; "
-                    "this SOCRATES build can stop while writing the MT_CKD netCDF map, "
-                    "and the block19 k-table text output does not need it."
-                )
+                f.write(f'-L {mtc_lbl_path} ')
+                f.write(f'-sm {mtc_map_path} ')
                 f.write(f'-np {corrk_nproc}')
             elif write_lbl_for_continuum:
                 f.write(f'-L {lbl_cia_path}')
@@ -1755,7 +1759,7 @@ if spec_type == 'sw' or ultra_hot_atmosphere:
         with open(exec_file_corrk_xuv, "w", encoding='utf-8') as f:
             f.write(f'Ccorr_k -s {skeleton_file_name} ')
             f.write(f'-UVX {uv_source_path} ')
-            idx_lower, idx_upper = find_index(wnedges[:-1], wnedges[1:], lower, upper, strict_band_edges=strict_band_edges)
+            idx_lower, idx_upper = find_index(wnedges[:-1], wnedges[1:], lower, upper, strict_band_edges=False)
             f.write(f'-R {idx_lower} {idx_upper} ')
             f.write(f'-F {pt_uv_path} ')
             f.write('-i 1.0 ')

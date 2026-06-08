@@ -46,3 +46,4 @@ out/
 job_BASE.slurm
 .portal/*
 job_BASE.slurm
+diagnose_absorption_mismatch.py

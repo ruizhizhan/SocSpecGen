@@ -8,13 +8,13 @@ from typing import Literal, Tuple, List
 origin_type:Literal['sw','lw'] = 'lw'
 root = os.path.dirname(os.path.abspath(__file__))
 
-for star in ['GJ3929', 'LTT1445A', 'LHS1140', 'TOI198', 'TOI406', 'TOI771', 'HD260655', 'TOI244']: #
-    spec_file = os.path.join(root,f"spectral_files/sp_b186/sp_{origin_type}_b186_{star}_sphinx_CO2_T62xP22_001_nk20")
+for star in ['TOI1452']: #
+    spec_file = os.path.join(root,f"spectral_files/sp_b96/sp_{origin_type}_b96_{star}_sphinx_CO2_T62xP22_001")
     
-    skeleton_file_root = os.path.join(root,f"spectral_files/agni_version/sp_b186/")
+    skeleton_file_root = os.path.join(root,f"spectral_files/agni_version/sp_b96/")
     if not os.path.exists(skeleton_file_root):
         os.makedirs(skeleton_file_root)
-    skeleton_file_name = os.path.join(skeleton_file_root,f"sp_b186_{star}_sphinx_CO2_T62xP22_001_nk20")
+    skeleton_file_name = os.path.join(skeleton_file_root,f"sp_b96_{star}_sphinx_CO2_T62xP22_001")
     os.system(f"cp {spec_file} {skeleton_file_name}")
     os.system(f"cp {spec_file}_k {skeleton_file_name}_k")
     
@@ -37,6 +37,10 @@ for star in ['GJ3929', 'LTT1445A', 'LHS1140', 'TOI198', 'TOI406', 'TOI771', 'HD2
         f.write(root+'/stellar_spectra/soc_in/'+star_name+'\n') # Enter file of solar irradiance data.
         f.write('C'+'\n')             # (A)air. (H)H2-He gas. (C)custom composition (A/H/C)
         f.write('A'+'\n')             # (A)calculation include all gases listed in block 0.
+        f.write('Y'+'\n')             # Assume entire atmosphere is this gas for Rayleigh scattering? (Y/N)
+        f.write('2\n')                # append solar spectrum
+        f.write('n\n')
+        f.write('y\n')
 
     f.write('-1'+ '\n')
     f.write('EOF'+ '\n')

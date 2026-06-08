@@ -290,6 +290,152 @@ def find_index(lower_bound, upper_bound, lower, upper, strict_band_edges=False):
     else:
         raise ValueError("find_index: Lower or upper value falls into a gap between bands.")
 
+def _copy_netcdf_attrs(source, target, skip_names=None):
+    skip = set(skip_names or [])
+    for attr_name in source.ncattrs():
+        if attr_name not in skip:
+            target.setncattr(attr_name, source.getncattr(attr_name))
+
+def _infer_nu_step_cm(nu_cm):
+    if len(nu_cm) < 2:
+        raise ValueError("Cannot infer nu step from fewer than two points")
+    diffs = np.diff(np.asarray(nu_cm, dtype=np.float64))
+    positive_diffs = diffs[diffs > 0]
+    if positive_diffs.size == 0:
+        raise ValueError("nu grid must be strictly increasing")
+    return float(np.median(positive_diffs))
+
+def _build_padded_nu_grid_cm(source_nu_cm, target_lower_wn, target_upper_wn):
+    source_nu_cm = np.asarray(source_nu_cm, dtype=np.float64)
+    if source_nu_cm.ndim != 1:
+        raise ValueError("nu grid must be one-dimensional")
+    if source_nu_cm.size == 0:
+        raise ValueError("nu grid is empty")
+
+    step_cm = _infer_nu_step_cm(source_nu_cm)
+    first = float(source_nu_cm[0])
+    last = float(source_nu_cm[-1])
+    target_lower = float(target_lower_wn)
+    target_upper = float(target_upper_wn)
+    tolerance = abs(step_cm) * 1.0e-6
+
+    lower_pad = np.array([], dtype=np.float64)
+    if target_lower < first - tolerance:
+        lower_desc = np.arange(first - step_cm, target_lower - step_cm * 0.5, -step_cm, dtype=np.float64)
+        lower_pad = lower_desc[::-1]
+
+    upper_pad = np.array([], dtype=np.float64)
+    if target_upper > last + tolerance:
+        upper_pad = np.arange(last + step_cm, target_upper + step_cm * 0.5, step_cm, dtype=np.float64)
+
+    padded_nu_cm = np.concatenate([lower_pad, source_nu_cm, upper_pad])
+    source_start_index = int(lower_pad.size)
+    return padded_nu_cm, source_start_index
+
+def _nu_chunk_length_for_var(variable, nu_axis, max_elements=2000000):
+    non_nu_elements = 1
+    for axis, dim_name in enumerate(variable.dimensions):
+        if axis != nu_axis:
+            non_nu_elements *= len(variable.group().dimensions[dim_name])
+    return max(1, int(max_elements // max(1, non_nu_elements)))
+
+def _copy_variable_with_padded_nu(src_var, dst_var, nu_dim_name, source_start_index, source_nu_len, fill_value):
+    nu_axis = src_var.dimensions.index(nu_dim_name)
+    chunk_len = _nu_chunk_length_for_var(src_var, nu_axis)
+    padded_nu_len = len(dst_var.group().dimensions[nu_dim_name])
+
+    def write_fill(start, stop):
+        for chunk_start in range(start, stop, chunk_len):
+            chunk_stop = min(stop, chunk_start + chunk_len)
+            chunk_shape = [len(dst_var.group().dimensions[dim_name]) for dim_name in dst_var.dimensions]
+            chunk_shape[nu_axis] = chunk_stop - chunk_start
+            dst_slices = [slice(None)] * len(dst_var.dimensions)
+            dst_slices[nu_axis] = slice(chunk_start, chunk_stop)
+            dst_var[tuple(dst_slices)] = np.full(chunk_shape, fill_value, dtype=dst_var.dtype)
+
+    if source_start_index > 0:
+        write_fill(0, source_start_index)
+
+    for src_start in range(0, source_nu_len, chunk_len):
+        src_stop = min(source_nu_len, src_start + chunk_len)
+        src_slices = [slice(None)] * len(src_var.dimensions)
+        src_slices[nu_axis] = slice(src_start, src_stop)
+        dst_slices = [slice(None)] * len(dst_var.dimensions)
+        dst_slices[nu_axis] = slice(source_start_index + src_start, source_start_index + src_stop)
+        dst_var[tuple(dst_slices)] = src_var[tuple(src_slices)]
+
+    upper_start = source_start_index + source_nu_len
+    if upper_start < padded_nu_len:
+        write_fill(upper_start, padded_nu_len)
+
+def create_strict_band_lbl_cache(source_path, cache_path, target_lower_wn, target_upper_wn, fill_value=1.0e-45):
+    """
+    Create a per-run LBL NetCDF cache covering the full target band range.
+
+    The source file is left untouched. Values outside the source nu range are
+    padded in kabs units (m2 kg-1) with a tiny positive absorption coefficient
+    for Ccorr_k.
+    """
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+
+    with netCDF4.Dataset(source_path, 'r') as src:
+        if 'nu' not in src.variables:
+            raise ValueError(f"LBL source is missing nu variable: {source_path}")
+        if 'kabs' not in src.variables:
+            raise ValueError(f"LBL source is missing kabs variable: {source_path}")
+
+        source_nu_m = np.asarray(src.variables['nu'][:], dtype=np.float64)
+        source_nu_cm = source_nu_m / 100.0
+        padded_nu_cm, source_start_index = _build_padded_nu_grid_cm(
+            source_nu_cm, target_lower_wn, target_upper_wn
+        )
+        padded_nu_m = padded_nu_cm * 100.0
+
+        tmp_cache_path = f"{cache_path}.tmp"
+        if os.path.exists(tmp_cache_path):
+            os.remove(tmp_cache_path)
+
+        with netCDF4.Dataset(tmp_cache_path, 'w', format=src.data_model) as dst:
+            _copy_netcdf_attrs(src, dst)
+
+            for dim_name, dim in src.dimensions.items():
+                if dim_name == src.variables['nu'].dimensions[0]:
+                    dst.createDimension(dim_name, len(padded_nu_m))
+                elif dim.isunlimited():
+                    dst.createDimension(dim_name, None)
+                else:
+                    dst.createDimension(dim_name, len(dim))
+
+            for var_name, src_var in src.variables.items():
+                fill = getattr(src_var, '_FillValue', None)
+                kwargs = {}
+                if fill is not None:
+                    kwargs['fill_value'] = fill
+
+                dst_var = dst.createVariable(var_name, src_var.datatype, src_var.dimensions, **kwargs)
+                _copy_netcdf_attrs(src_var, dst_var, skip_names={'_FillValue'})
+
+                if var_name == 'nu':
+                    dst_var[:] = padded_nu_m
+                    continue
+
+                if 'nu' not in src_var.dimensions:
+                    dst_var[:] = src_var[:]
+                    continue
+
+                _copy_variable_with_padded_nu(
+                    src_var,
+                    dst_var,
+                    src.variables['nu'].dimensions[0],
+                    source_start_index,
+                    source_nu_m.size,
+                    fill_value,
+                )
+
+        os.replace(tmp_cache_path, cache_path)
+
+    return cache_path
+
 def generate_LBL_from_ExoMol_hdf5(root, hdf5_path,Molecule_str,datasource,update_library=True,test_name=None):
     ncfile_name = f'{Molecule_str}_{datasource}'
     hdf5_file = netCDF4.Dataset(hdf5_path, 'r')

@@ -13,8 +13,10 @@ RES = '001'
 MOLEULES_TO_INCLUDE = ['H2O']
 STAR_NAME = 'Trappist-1_sphinx'
 NUM_KTERM = 20
-UPDATE_LIBRARY = False # only for first run for each ExoMol file
+UPDATE_LIBRARY = True # only for first run for each ExoMol file
 WRITE_QA_SUMMARY = False # for debug
+STRICT_BAND_EDGES = True
+STRICT_BAND_FILL_VALUE = 1.0e-45 # padding xsec in hdf5 units: cm2/molecule
 # K7_5V_phoenix M2_5V_sphinx M8_5V_sphinx LHS3844_sphinx LTT1445A_sphinx Trappist-1_sphinx GJ486_sphinx GJ1132_sphinx GJ3929_sphinx 
 TEST_NAME = f'{STAR_NAME}_Snowline'
 
@@ -220,9 +222,9 @@ GAS_LIBRARY = {
 # 3. CIA Library (Independent)
 # ==========================================
 # Keys are the pair names (Must match structure MolA-MolB).
-# For a single spectral file, the worker uses one shared CIA T-grid for all
-# active pairs. This is a controlled approximation and may require extrapolation
-# for some pair/band combinations.
+# For a single spectral file, the worker derives one shared CIA T-grid from the
+# intersection of all active pair-local grids. CIA_SHARED_T_GRID is only the
+# fallback when the derived intersection contains fewer than two temperatures.
 CIA_T_GRID_POLICY = 'shared'
 CIA_SHARED_T_GRID = [293, 296]
 CIA_T_GRID_OVERRIDE_BY_PAIR = {}
